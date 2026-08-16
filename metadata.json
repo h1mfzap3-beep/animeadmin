@@ -1,0 +1,6 @@
+{
+  "name": "Luna - Anime Tracker",
+  "description": "Modern anime nyomkövető webalkalmazás, Tampermonkey motorral (OniAnime, MagyarAnime, AnimeDrive, UraharaShop, Naruto-Kun, MutekiFansub), egyéni oldal felvevővel, AniList/MyAnimeList szinkronnal és automatikus konfliktuskezeléssel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

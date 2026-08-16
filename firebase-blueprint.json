@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "AnimeTrack": {
+      "title": "AnimeTrack",
+      "description": "Represents a tracked anime with current episode, streaming source site, and status.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The title of the anime series",
+          "maxLength": 300
+        },
+        "episode": {
+          "type": "number",
+          "description": "The current watched episode number"
+        },
+        "totalEpisodes": {
+          "type": "number",
+          "description": "Total episodes in the season or series"
+        },
+        "source": {
+          "type": "string",
+          "description": "Streaming website source like MagyarAnime, OniAnime",
+          "enum": ["MagyarAnime", "OniAnime", "AnimeGun", "Indavideo", "Egyéb"]
+        },
+        "sourceUrl": {
+          "type": "string",
+          "description": "Direct URL of the anime episode stream",
+          "maxLength": 1000
+        },
+        "status": {
+          "type": "string",
+          "description": "Watch status",
+          "enum": ["watching", "completed", "plan_to_watch", "on_hold", "dropped"]
+        },
+        "coverImage": {
+          "type": "string",
+          "description": "Poster or thumbnail image URL",
+          "maxLength": 1000
+        },
+        "rating": {
+          "type": "number",
+          "description": "Score from 1 to 10"
+        },
+        "notes": {
+          "type": "string",
+          "description": "User notes or comments",
+          "maxLength": 2000
+        },
+        "syncedFromExtension": {
+          "type": "boolean",
+          "description": "Whether synced via the Luna Chrome extension"
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID of the owner or admin",
+          "maxLength": 128
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Email of the owner or admin",
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation"
+        }
+      },
+      "required": ["title", "episode", "source", "status"]
+    }
+  },
+  "firestore": {
+    "/anime_tracks/{trackId}": {
+      "schema": "AnimeTrack",
+      "description": "Collection of tracked anime episodes synchronized across the web app and Chrome extension"
+    }
+  }
+}
