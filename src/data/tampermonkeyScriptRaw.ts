@@ -1,7 +1,7 @@
 export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
 // @name         Luna Anime Tracker HUD
 // @namespace    https://luna.tracker.local/
-// @version      5.3.0
+// @version      5.3.1
 // @description  Intelligens automatikus anime szinkronizálás és lebegő HUD magyar és nemzetközi anime oldalakhoz (MagyarAnime, OniAnime, AnimeGun, Videa, Indavideo stb.).
 // @author       Luna
 // @match        *://*.magyaranime.eu/*
@@ -993,7 +993,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   ];
 
   function getStoredServerUrl() {
-    return Storage.get('luna_custom_server_url', '') || DEFAULT_CLOUD_SERVERS[0];
+    return (Storage.get('luna_custom_server_url', '') || DEFAULT_CLOUD_SERVERS[0]).replace(/\/+$/, '');
   }
 
   let bc = null;
@@ -1006,7 +1006,10 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   function buildPayload() {
     return {
       title: state.title,
+      animeTitle: state.title,
       episode: state.episode,
+      episodeNumber: state.episode,
+      clientEventId: state.title + '|' + state.episode + '|' + location.href,
       totalEpisodes: state.totalEpisodes || null,
       status: state.status,
       source: state.source,
@@ -1583,7 +1586,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     if (changed) {
       state.sourceUrl = location.href;
       render();
-      saveAndSync(false);
+      if (state.titleConfident && state.title !== 'Anime Sorozat') saveAndSync(false);
     }
   }
 
@@ -1636,7 +1639,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     reDetect(true);
     render();
     hookVideos();
-    saveAndSync(false);
     toast('🌙 Luna Tracker aktív (Alt+L)');
   }
 

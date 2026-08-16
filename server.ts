@@ -57,7 +57,7 @@ async function startServer() {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Luna-Client');
     if (req.method === 'OPTIONS') {
       return res.status(200).end();
     }
@@ -81,8 +81,10 @@ async function startServer() {
   app.post('/api/sync', async (req: Request, res: Response) => {
     try {
       const body = req.body || {};
-      const title = (body.title || '').trim();
-      const episode = typeof body.episode === 'number' ? body.episode : parseInt(body.episode, 10) || 1;
+      const rawTitle = body.title ?? body.animeTitle;
+      const title = typeof rawTitle === 'string' ? rawTitle.trim() : '';
+      const rawEpisode = body.episode ?? body.episodeNumber;
+      const episode = typeof rawEpisode === 'number' ? rawEpisode : parseInt(String(rawEpisode), 10) || 1;
       const totalEpisodes = body.totalEpisodes ? Number(body.totalEpisodes) : null;
       const source = (body.source || 'Egyéb').trim();
       const sourceUrl = (body.sourceUrl || '').trim();
@@ -91,8 +93,11 @@ async function startServer() {
       const coverImage = body.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=600&q=80';
       const origin = body.origin || req.headers.origin || 'Tampermonkey Script';
 
-      if (!title) {
-        return res.status(400).json({ error: 'Anime title is required for sync' });
+      if (!title || title === 'Anime Sorozat') {
+        return res.status(400).json({ error: 'A pontos anime cím szükséges a szinkronizáláshoz.' });
+      }
+      if (!Number.isInteger(episode) || episode < 1 || episode > 10000) {
+        return res.status(400).json({ error: 'Érvénytelen epizódszám.' });
       }
 
       const cleanTargetTitle = title.toLowerCase().trim();
@@ -100,27 +105,28 @@ async function startServer() {
       
       // Look up existing anime strictly by ID or exact title match (never unsafe substrings!)
       const tracksCol = collection(db, 'anime_tracks');
-      const allDocsSnap = await getDocs(tracksCol);
-      
       let matchedDocRef = doc(db, 'anime_tracks', defaultTrackId);
       let matchedDocData: any = null;
       let matchedDocId = defaultTrackId;
 
-      // Helper for clean comparison (ignoring case, punctuation, multiple spaces)
-      const normalizeForCompare = (s: string) => s.toLowerCase().replace(/[^a-z0-9áéíóöőúüű]/gi, '').trim();
-      const targetNormalized = normalizeForCompare(title);
-
-      for (const d of allDocsSnap.docs) {
-        const data = d.data() as any;
-        const itemTitle = (data.title || '').toLowerCase().trim();
-        const itemNormalized = normalizeForCompare(data.title || '');
-
-        // Match if IDs match OR exact titles match OR normalized alphanumeric strings match exactly
-        if (d.id === defaultTrackId || itemTitle === cleanTargetTitle || (targetNormalized.length > 2 && itemNormalized === targetNormalized)) {
-          matchedDocRef = doc(db, 'anime_tracks', d.id);
-          matchedDocData = data;
-          matchedDocId = d.id;
-          break;
+      // Use the deterministic document ID first; scan old records only for compatibility.
+      const directDocSnap = await getDoc(matchedDocRef);
+      if (directDocSnap.exists()) {
+        matchedDocData = directDocSnap.data();
+      } else {
+        const allDocsSnap = await getDocs(tracksCol);
+        const normalizeForCompare = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '').trim();
+        const targetNormalized = normalizeForCompare(title);
+        for (const d of allDocsSnap.docs) {
+          const data = d.data() as any;
+          const itemTitle = (data.title || '').toLowerCase().trim();
+          const itemNormalized = normalizeForCompare(data.title || '');
+          if (d.id === defaultTrackId || itemTitle === cleanTargetTitle || (targetNormalized.length > 2 && itemNormalized === targetNormalized)) {
+            matchedDocRef = doc(db, 'anime_tracks', d.id);
+            matchedDocData = data;
+            matchedDocId = d.id;
+            break;
+          }
         }
       }
 
