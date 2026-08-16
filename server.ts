@@ -50,6 +50,57 @@ function normalizeWatchStatus(status?: string): string {
   return 'watching';
 }
 
+// --- Luna Sync v6: idempotencia es last-write-wins utkozeskezeles ---
+
+// eventId alapu duplikacio-szures: ugyanaz az esemeny (pl. egy retry miatt
+// ketszer elkuldve) csak egyszer szamit bele. A Map a szerver folyamatban el,
+// ujrainditasnal kiurul, de a per-dokumentum lastSyncEventId ezt athidalja.
+const SYNC_DEDUPE_MAP = new Map<string, number>();
+const SYNC_DEDUPE_MAX = 500;
+const SYNC_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function isDuplicateEvent(eventId: string | undefined, trackLastEventId?: string): boolean {
+  if (!eventId) return false;
+  if (trackLastEventId && trackLastEventId === eventId) return true;
+  if (SYNC_DEDUPE_MAP.has(eventId)) return true;
+
+  const now = Date.now();
+  if (SYNC_DEDUPE_MAP.size >= SYNC_DEDUPE_MAX) {
+    for (const [k, t] of SYNC_DEDUPE_MAP.entries()) {
+      if (now - t > SYNC_DEDUPE_TTL_MS) SYNC_DEDUPE_MAP.delete(k);
+    }
+    while (SYNC_DEDUPE_MAP.size >= SYNC_DEDUPE_MAX) {
+      let oldestKey: string | null = null;
+      let oldestTs = Infinity;
+      for (const [k, t] of SYNC_DEDUPE_MAP.entries()) {
+        if (t < oldestTs) { oldestTs = t; oldestKey = k; }
+      }
+      if (!oldestKey) break;
+      SYNC_DEDUPE_MAP.delete(oldestKey);
+    }
+  }
+  SYNC_DEDUPE_MAP.set(eventId, now);
+  return false;
+}
+
+// A bejovo esemeny kliens-idobelyege lenyegesen regebbi, mint ami mar a
+// Firestore-ban van (pl. egy regi, ujrakuldott sor-elem futna be kesobb),
+// akkor a regi NEM irja felul az ujat. Az 5 mp tolerancia az eszkozok
+// ora-eltereset kompenzalja.
+function isStaleEvent(incomingTs: number | undefined, existingTs: number | undefined): boolean {
+  if (typeof incomingTs !== 'number' || !Number.isFinite(incomingTs)) return false;
+  if (typeof existingTs !== 'number' || !Number.isFinite(existingTs)) return false;
+  return existingTs - incomingTs > 5000;
+}
+
+function pickClientTimestamp(body: any): number | undefined {
+  const candidates = [body.clientTimestamp, body.timestamp];
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c)) return c;
+  }
+  return undefined;
+}
+
 async function startServer() {
   const app = express();
 
@@ -77,7 +128,8 @@ async function startServer() {
     });
   });
 
-  // Cross-Origin Tampermonkey Real-time Sync Endpoint
+  // Cross-Origin Tampermonkey Real-time Sync Endpoint (Luna Sync v6:
+  // idempotens, last-write-wins utkozeskezelessel)
   app.post('/api/sync', async (req: Request, res: Response) => {
     try {
       const body = req.body || {};
@@ -90,6 +142,12 @@ async function startServer() {
       const status = normalizeWatchStatus(rawStatus);
       const coverImage = body.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=600&q=80';
       const origin = body.origin || req.headers.origin || 'Tampermonkey Script';
+
+      // Luna Sync v6 uj mezok
+      const eventId = typeof body.eventId === 'string' ? body.eventId.slice(0, 64) : '';
+      const deviceId = (typeof body.deviceId === 'string' ? body.deviceId : 'unknown-device').slice(0, 64);
+      const clientTimestamp = pickClientTimestamp(body);
+      const syncVersion = typeof body.syncVersion === 'number' ? body.syncVersion : 5;
 
       if (!title) {
         return res.status(400).json({ error: 'Anime title is required for sync' });
@@ -124,6 +182,31 @@ async function startServer() {
         }
       }
 
+      // --- Idempotencia: mar feldolgozott esemeny ne duplikaljon ---
+      if (isDuplicateEvent(eventId, matchedDocData?.lastSyncEventId)) {
+        return res.json({
+          success: true,
+          action: 'duplicate',
+          trackId: matchedDocId,
+          title: matchedDocData?.title || title,
+          episode: matchedDocData?.episode ?? episode,
+          status: matchedDocData?.status || status
+        });
+      }
+
+      // --- Utkozeskezeles: a regebbi kliens-esemeny nem irja felul az ujabbat ---
+      if (matchedDocData && isStaleEvent(clientTimestamp, matchedDocData.lastClientTimestamp)) {
+        console.log(`[API /api/sync] Skipped stale event for "${matchedDocData.title || title}" (incoming ts ${clientTimestamp} < stored ${matchedDocData.lastClientTimestamp})`);
+        return res.json({
+          success: true,
+          action: 'skipped_stale',
+          trackId: matchedDocId,
+          title: matchedDocData.title || title,
+          episode: matchedDocData.episode,
+          status: matchedDocData.status
+        });
+      }
+
       const now = new Date().toISOString();
 
       if (matchedDocData) {
@@ -137,7 +220,11 @@ async function startServer() {
           updatedAt: now,
           syncedFromExtension: true,
           lastWatchedUrl: sourceUrl || matchedDocData.sourceUrl || '',
-          lastSyncOrigin: origin
+          lastSyncOrigin: origin,
+          lastSyncEventId: eventId,
+          lastClientTimestamp: clientTimestamp ?? Date.now(),
+          syncDeviceId: deviceId,
+          syncVersion
         };
 
         if (totalEpisodes && !isNaN(totalEpisodes) && totalEpisodes > 0) {
@@ -174,7 +261,11 @@ async function startServer() {
           createdAt: now,
           updatedAt: now,
           lastWatchedUrl: sourceUrl || '',
-          lastSyncOrigin: origin
+          lastSyncOrigin: origin,
+          lastSyncEventId: eventId,
+          lastClientTimestamp: clientTimestamp ?? Date.now(),
+          syncDeviceId: deviceId,
+          syncVersion
         };
 
         if (totalEpisodes && !isNaN(totalEpisodes) && totalEpisodes > 0) {

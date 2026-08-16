@@ -1,8 +1,10 @@
+// AUTO-GENERATED from public/Luna-Anime-Tracker.user.js (v6.0.0) — NE SZERKESZD KÉZZEL!
+// Ha a userscript változik, a build lépés generálja újra ezt a fájlt.
 export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
 // @name         Luna Anime Tracker HUD
 // @namespace    https://luna.tracker.local/
-// @version      5.3.0
-// @description  Intelligens automatikus anime szinkronizálás és lebegő HUD magyar és nemzetközi anime oldalakhoz (MagyarAnime, OniAnime, AnimeGun, Videa, Indavideo stb.).
+// @version      6.0.0
+// @description  Intelligens automatikus anime szinkronizálás és lebegő HUD magyar és nemzetközi anime oldalakhoz. Megbízható felhő-szinkron: perzisztens várakozási sor, automatikus újrapróbálás, szerver-feladatváltás.
 // @author       Luna
 // @match        *://*.magyaranime.eu/*
 // @match        *://*.magyaranime.hu/*
@@ -50,6 +52,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
 // @include      *
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_deleteValue
 // @grant        GM_notification
 // @grant        GM_addStyle
 // @grant        GM_setClipboard
@@ -93,7 +96,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     'indavideo.hu',
     'videa.hu',
     'videakid.hu',
-    
+
     // Nemzetközi
     'hianime.to',
     'aniwatch.to',
@@ -180,13 +183,12 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   }
 
   const currentHost = (window.location.hostname || '').toLowerCase();
-  const isDashboardHost = currentHost.includes('run.app') || 
-                          currentHost.includes('localhost') || 
+  const isDashboardHost = currentHost.includes('run.app') ||
+                          currentHost.includes('localhost') ||
                           window.location.port === '3000' ||
                           currentHost.includes('firebaseapp.com') ||
                           currentHost.includes('web.app');
 
-  // Ha a felhasználó a saját Luna Webes Felületén jár, azonnal rögzítjük a felhő szerver URL-t
   if (isDashboardHost) {
     try {
       if (window.location.origin && window.location.origin.startsWith('http')) {
@@ -233,7 +235,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
    * 2. INTELLIGENS MAGYAR & NEMZETKÖZI ANIME FELISMERŐ MOTOR
    * ============================================================ */
 
-  // Ismert weboldal nevek és logók, amiket ki kell vágni a címből
   const SITE_BRAND_NAMES = [
     'magyaranime', 'magyar anime', 'magyaranime.hu', 'magyaranime.eu', 'magyaranime.org',
     'onianime', 'oni anime', 'onianime.hu', 'onianime.net',
@@ -255,7 +256,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     'főoldal', 'fooldal', 'online nézés', 'anime lejátszó'
   ];
 
-  // Fölösleges felirat/minőség/online címkék
   const JUNK_PHRASES = [
     'magyar felirattal',
     'magyar felirat',
@@ -317,38 +317,31 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     if (!raw) return '';
     let text = String(raw).trim();
 
-    // 1. Zárójeles csoportok törlése ha csak minőséget vagy feliratot jelölnek: pl [AnimeDrive], [Magyar Felirat], [1080p]
-    text = text.replace(/\[(?:magyar felirat|magyar szinkron|animedrive|dh\+|hd|1080p|720p|indavideo|videa|sub|dub|[^\]]{1,20})\]/gi, ' ');
-    text = text.replace(/\((?:magyar felirat|magyar szinkron|1080p|720p|hd|sub|dub)\)/gi, ' ');
+    text = text.replace(/\\[(?:magyar felirat|magyar szinkron|animedrive|dh\\+|hd|1080p|720p|indavideo|videa|sub|dub|[^\\]]{1,20})\\]/gi, ' ');
+    text = text.replace(/\\((?:magyar felirat|magyar szinkron|1080p|720p|hd|sub|dub)\\)/gi, ' ');
 
-    // 2. Ha van elválasztó karakter (pl "MagyarAnime - Solo Leveling 2. Évad 5. Rész" vagy "Solo Leveling | OniAnime")
-    const parts = text.split(/\s*[\–\—\|\»\•]\s*|\s+-\s+|\s+\/\s+/);
+    const parts = text.split(/\\s*[\\–\\—\\|\\»\\•]\\s*|\\s+-\\s+|\\s+\\/\\s+/);
     if (parts.length > 1) {
-      // Válasszuk ki azt a darabot, ami NEM oldalnév és a leghosszabb / leginkább animére hasonlít
       const validCandidates = parts.map(p => p.trim()).filter(p => !isSiteBrand(p) && p.length > 2);
       if (validCandidates.length > 0) {
-        // Válasszuk a legértelmesebb darabot
         text = validCandidates[0];
       } else {
         text = parts[0];
       }
     }
 
-    // 3. Junk szavak kigyomlálása
     for (const junk of JUNK_PHRASES) {
       const regex = new RegExp('\\\\b' + junk.replace('.', '\\\\.') + '\\\\b', 'gi');
       text = text.replace(regex, ' ');
     }
 
-    // 4. Rész megjelölések levágása a cím végéről (pl: "12. Rész", "5.rész", "05. Rész", "Episode 12", "Ep 12")
-    text = text.replace(/\b\d{1,4}\s*[\.\-]?\s*(?:rész|resz|epizód|epizod|episode|ep)\b/gi, ' ');
-    text = text.replace(/(?:rész|resz|epizód|epizod|episode|ep)\s*[:\-#]?\s*\d{1,4}\b/gi, ' ');
-    text = text.replace(/\b[eE]\d{1,4}\b/g, ' ');
+    text = text.replace(/\\b\\d{1,4}\\s*[\\.\\-]?\\s*(?:rész|resz|epizód|epizod|episode|ep)\\b/gi, ' ');
+    text = text.replace(/(?:rész|resz|epizód|epizod|episode|ep)\\s*[:\\-#]?\\s*\\d{1,4}\\b/gi, ' ');
+    text = text.replace(/\\b[eE]\\d{1,4}\\b/g, ' ');
 
-    // 5. Megtartjuk az Évadot/Seasont ha van ("2. Évad", "Season 2"), de formázzuk szépen
     text = text.replace(/_/g, ' ');
-    text = text.replace(/\s{2,}/g, ' ');
-    text = text.replace(/^[\s\-\.\:\|,;\/]+|[\s\-\.\:\|,;\/]+$/g, '');
+    text = text.replace(/\\s{2,}/g, ' ');
+    text = text.replace(/^[\\s\\-\\.\\:\\|,;\\/]+|[\\s\\-\\.\\:\\|,;\\/]+$/g, '');
 
     return text.trim();
   }
@@ -356,7 +349,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   function detectTitle() {
     const hostname = window.location.hostname.toLowerCase();
 
-    // 1. Oldalspecifikus kiemelt DOM elemek (Magyar és külföldi oldalak)
     if (hostname.includes('magyaranime')) {
       const el = document.querySelector('.play-title, .anime-title, .entry-title, .film-name, .breadcrumb li:nth-last-child(2) a, .breadcrumb li:last-child');
       if (el && el.textContent) {
@@ -421,14 +413,12 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       }
     }
 
-    // 2. OpenGraph / Twitter meta címkék
     const og = document.querySelector('meta[property="og:title"], meta[name="twitter:title"]');
     if (og && og.content) {
       const c = cleanTitle(og.content);
       if (c.length >= 2 && !isSiteBrand(c)) return { title: c, confident: true };
     }
 
-    // 3. Általános DOM fejlécek
     const genericSelectors = [
       'h1.entry-title',
       'h1.anime-title',
@@ -449,7 +439,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       }
     }
 
-    // 4. document.title feldolgozása
     if (document.title) {
       const c = cleanTitle(document.title);
       if (c.length >= 2 && !isSiteBrand(c)) return { title: c, confident: c.length >= 4 };
@@ -461,7 +450,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   function detectEpisode() {
     const url = location.href;
 
-    // 1. URL Query paraméterek
     try {
       const u = new URL(url);
       for (const key of ['resz', 'ep', 'episode', 'e', 'res', 'epizod', 'part', 'track']) {
@@ -472,10 +460,9 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       }
     } catch (e) {}
 
-    // 2. URL útvonal minták
     const urlPatterns = [
       /[\\/\\-_](?:ep|episode|resz|rész|epizod|epizód)[\\-_\\/]?(\\d{1,4})/i,
-      /[\\/\\-_](\\d{1,4})[\\-_\\.\\/](?:resz|rész|ep|episode)/i,
+      /[\\/\\-_](\\d{1,4})[\\-_.\\/](?:resz|rész|ep|episode)/i,
       /[\\/\\-_]e(\\d{1,4})(?:[\\/\\-_]|$)/i,
       /s\\d{1,2}e(\\d{1,4})/i,
       /(\\d{1,4})-(?:resz|rész)/i,
@@ -487,7 +474,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       if (m) return { ep: parseInt(m[1], 10), found: true };
     }
 
-    // 3. Aktív epizódválasztó a DOM-ban
     const epSelectors = [
       'select.epizod-valaszto option:checked',
       '.episode-current',
@@ -510,7 +496,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       }
     }
 
-    // 4. Szöveges minták a címben és oldalszövegben
     const text = (document.title || '') + ' ' + (document.body?.innerText?.slice(0, 3000) || '');
     const textPatterns = [
       /(\\d{1,4})\\s*\\.\\s*(?:rész|resz|epizód|epizod)/i,
@@ -533,6 +518,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   const state = {
     title: 'Anime Sorozat',
     episode: 1,
+    totalEpisodes: null,
     status: Storage.get('status', 'watching'),
     minimized: Storage.get('minimized', false),
     hidden: false,
@@ -546,6 +532,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     lastSync: null,
     syncCount: 0,
     cloudSyncOk: false,
+    pendingSync: 0
   };
 
   /* ============================================================
@@ -677,7 +664,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       gap: 10px !important;
     }
 
-    /* === AUTO SYNC TISZTA NÉZET === */
     .luna-auto-card {
       background: linear-gradient(135deg, rgba(6, 182, 212, 0.12), rgba(15, 23, 42, 0.6)) !important;
       border: 1px solid rgba(56, 189, 248, 0.35) !important;
@@ -771,9 +757,19 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       height: 6px !important;
       border-radius: 50% !important;
       background: #10b981 !important;
+      flex-shrink: 0 !important;
+    }
+    .luna-sync-dot.pending {
+      background: #f59e0b !important;
+      box-shadow: 0 0 8px #f59e0b !important;
+    }
+    .luna-sync-text {
+      max-width: 210px !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
     }
 
-    /* === ✏️ CERUZA SZERKESZTŐ NÉZET === */
     .luna-edit-form {
       display: flex !important;
       flex-direction: column !important;
@@ -886,7 +882,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       color: #fff !important;
     }
 
-    /* ---- MINI PILL ---- */
     .luna-pill {
       display: flex !important;
       align-items: center !important;
@@ -913,6 +908,10 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       box-shadow: 0 0 10px #22c55e !important;
       animation: luna-pulse 1.6s ease-in-out infinite !important;
       flex-shrink: 0 !important;
+    }
+    .luna-pill-dot.pending {
+      background: #f59e0b !important;
+      box-shadow: 0 0 10px #f59e0b !important;
     }
     .luna-pill-title {
       max-width: 140px !important;
@@ -984,16 +983,56 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   }
 
   /* ============================================================
-   * 5. LAPKÖZI ÉS FELHŐ ALAPÚ SZINKRONIZÁCIÓ
+   * 5. MEGbíZHATÓ FELHŐ-SZINKRONIZÁCIÓ (v6)
+   * ------------------------------------------------------------
+   * Design:
+   *   - Minden epizód-frissítés ELŐSZÖR perzisztens várakozási sorba
+   *     kerül (GM_setValue / localStorage), és csak utána indul a küldés.
+   *     Egy sikertelen POST így SOSEM vesz el adatot.
+   *   - Több szerver-jelölt közül sorban próbálkozik (custom URL +
+   *     beépített szerverek), és megjegyzi, melyik válaszolt utoljára.
+   *   - Sikertelen küldésnél exponenciális backoff (15s -> 5 perc),
+   *     20 másodpercenkénti automata flush ciklussal.
+   *   - 'online' böngésző-eseményre és fül visszaváltásra azonnal
+   *     újrapróbálkozik.
+   *   - Minden esemény egyedi eventId-vel és clientTimestamp-pel indul,
+   *     a szerver így idempotens lehet (duplikáció-szűrés) és
+   *     last-write-wins ütközéskezelést tud végezni.
+   *   - Ugyanarra a címre vonatkozó sorban álló frissítések összeolvadnak
+   *     (coalesce): mindig csak a legfrissebb állapot vár küldésre.
    * ============================================================ */
+  const SYNC_VERSION = 6;
+
   const DEFAULT_CLOUD_SERVERS = [
     'https://ais-dev-haau57gidvc74j2nnjloyk-452811031712.europe-west2.run.app',
     'https://ais-pre-haau57gidvc74j2nnjloyk-452811031712.europe-west2.run.app',
     'http://localhost:3000'
   ];
 
-  function getStoredServerUrl() {
-    return Storage.get('luna_custom_server_url', '') || DEFAULT_CLOUD_SERVERS[0];
+  const SYNC_KEYS = {
+    queue: 'sync_queue_v6',
+    activeServer: 'active_server_v6',
+    deviceId: 'device_id_v6'
+  };
+
+  const SYNC_CONFIG = {
+    flushIntervalMs: 20000,   // rendszeres automata újrapróbálás
+    debounceMs: 1500,         // ennyi időn belüli változások egy csomagban indulnak
+    requestTimeoutMs: 10000,  // egy kérés maximális várakozási ideje
+    maxQueueSize: 200,        // várakozási sor felső korlát
+    maxAttempts: 240,         // ennyi próbálkozás után dobja el (napokig próbálkozik)
+    baseBackoffMs: 15000,     // exponenciális backoff kezdő értéke
+    maxBackoffMs: 300000,     // backoff felső korlátja (5 perc)
+    maxItemsPerFlush: 10      // egy flush alatt legfeljebb ennyi elemet küld el
+  };
+
+  function uid() {
+    try {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+    } catch (e) {}
+    return 'evt-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   }
 
   let bc = null;
@@ -1003,7 +1042,285 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     bc = null;
   }
 
+  const SyncEngine = (() => {
+    let queue = [];
+    let debounceTimer = null;
+    let loopTimer = null;
+    let flushing = false;
+    let queueCb = null;
+    let ackCb = null;
+
+    function loadQueue() {
+      const q = Storage.get(SYNC_KEYS.queue, []);
+      queue = Array.isArray(q) ? q.filter(it => it && it.payload && it.payload.title) : [];
+    }
+
+    function persistQueue() {
+      Storage.set(SYNC_KEYS.queue, queue);
+      emitQueue();
+    }
+
+    function emitQueue() {
+      if (typeof queueCb === 'function') {
+        try { queueCb(queue.length); } catch (e) {}
+      }
+    }
+
+    function serverList() {
+      const list = [];
+      const custom = String(Storage.get('luna_custom_server_url', '') || '').trim().replace(/\\/+$/, '');
+      if (/^https?:\\/\\//i.test(custom) && !list.includes(custom)) list.push(custom);
+      for (const s of DEFAULT_CLOUD_SERVERS) {
+        const base = s.replace(/\\/+$/, '');
+        if (!list.includes(base)) list.push(base);
+      }
+      return list;
+    }
+
+    function activeIndex() {
+      const i = parseInt(Storage.get(SYNC_KEYS.activeServer, 0), 10);
+      const list = serverList();
+      if (isNaN(i) || i < 0 || i >= list.length) return 0;
+      return i;
+    }
+
+    function setActiveIndex(i) {
+      Storage.set(SYNC_KEYS.activeServer, i);
+    }
+
+    function getDeviceId() {
+      let id = Storage.get(SYNC_KEYS.deviceId, '');
+      if (!id) {
+        id = 'luna-' + uid();
+        Storage.set(SYNC_KEYS.deviceId, id);
+      }
+      return id;
+    }
+
+    function normalizedTitle(t) {
+      return String(t || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+    }
+
+    function enqueue(payload) {
+      loadQueue();
+
+      const item = {
+        eventId: payload.eventId || uid(),
+        payload: payload,
+        attempts: 0,
+        nextAttempt: 0,
+        createdAt: Date.now()
+      };
+
+      // Coalesce: ugyanerre a címre már várakozó (régebbi) frissítést
+      // felváltja a legfrissebb állapot, ne duzzadjon a sor.
+      const norm = normalizedTitle(payload.title);
+      queue = queue.filter(it => normalizedTitle(it.payload && it.payload.title) !== norm);
+
+      queue.push(item);
+      if (queue.length > SYNC_CONFIG.maxQueueSize) {
+        queue = queue.slice(queue.length - SYNC_CONFIG.maxQueueSize);
+      }
+
+      persistQueue();
+      scheduleFlush(SYNC_CONFIG.debounceMs);
+    }
+
+    // Egy HTTP kérés ígéret formájában. GM_xmlhttpRequest-t használ, ha
+    // elérhető (CORS-mentes), különben sima fetch fallbackkel.
+    function httpRequest(url, payload) {
+      return new Promise((resolve) => {
+        const body = JSON.stringify(payload);
+        const done = (ok, status, data) => resolve({ ok, status, data });
+
+        if (typeof GM_xmlhttpRequest === 'function') {
+          try {
+            GM_xmlhttpRequest({
+              method: 'POST',
+              url: url,
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+              },
+              data: body,
+              timeout: SYNC_CONFIG.requestTimeoutMs,
+              onload: function (resp) {
+                let data = null;
+                try { data = JSON.parse(resp.responseText); } catch (e) {}
+                done(resp.status >= 200 && resp.status < 300, resp.status, data);
+              },
+              onerror: function () { done(false, 0, null); },
+              ontimeout: function () { done(false, 0, null); }
+            });
+            return;
+          } catch (e) {
+            /* esés a fetch fallbackre */
+          }
+        }
+
+        let signal = undefined;
+        let timer = null;
+        try {
+          if (typeof AbortController !== 'undefined') {
+            const ctrl = new AbortController();
+            signal = ctrl.signal;
+            timer = setTimeout(() => ctrl.abort(), SYNC_CONFIG.requestTimeoutMs);
+          }
+        } catch (e) {}
+
+        fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          mode: 'cors',
+          body: body,
+          signal: signal
+        })
+          .then(function (res) {
+            return res.json().catch(() => null).then(function (data) {
+              done(res.ok, res.status, data);
+            });
+          })
+          .catch(function () { done(false, 0, null); })
+          .then(function () { if (timer) clearTimeout(timer); });
+      });
+    }
+
+    // Egy elem kipróbálása a szerverlistán. Visszatérési értékek:
+    //   'ack'   — a szerver visszaigazolta (updated/created/duplicate/skipped_stale)
+    //   'drop'  — végleges elutasítás (4xx): nincs értelme újrapróbálni
+    //   'retry' — hálózati/szerverhiba: később újra kell próbálni
+    function sendItem(item) {
+      const list = serverList();
+      const start = activeIndex();
+
+      function attemptOn(offset) {
+        const idx = (start + offset) % list.length;
+        const base = list[idx];
+        const url = base.replace(/\\/+$/, '') + '/api/sync';
+
+        return httpRequest(url, item.payload).then(function (r) {
+          if (r.ok && r.data && (r.data.success === true || r.data.action)) {
+            setActiveIndex(idx);
+            return { result: 'ack', server: base, data: r.data };
+          }
+          if (r.status >= 400 && r.status < 500 && r.status !== 429) {
+            return { result: 'drop', server: base, status: r.status };
+          }
+          return { result: 'retry', server: base, status: r.status };
+        });
+      }
+
+      let p = attemptOn(0);
+      for (let offset = 1; offset < list.length; offset++) {
+        const off = offset;
+        p = p.then(function (prev) {
+          if (prev.result !== 'retry') return prev;
+          return attemptOn(off);
+        });
+      }
+      return p;
+    }
+
+    async function flushNow() {
+      if (flushing) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+      flushing = true;
+      try {
+        loadQueue();
+        const now = Date.now();
+        const due = queue
+          .filter(it => (it.nextAttempt || 0) <= now)
+          .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+          .slice(0, SYNC_CONFIG.maxItemsPerFlush);
+
+        for (const item of due) {
+          const outcome = await sendItem(item);
+
+          loadQueue();
+          const idx = queue.findIndex(it => it.eventId === item.eventId);
+          if (idx === -1) continue; // közben másik fül már eltávolította
+
+          if (outcome.result === 'ack') {
+            queue.splice(idx, 1);
+            persistQueue();
+            if (typeof ackCb === 'function') {
+              try { ackCb(outcome.data || {}, queue.length); } catch (e) {}
+            }
+          } else if (outcome.result === 'drop') {
+            console.warn('[Luna Sync] Véglegesen elutasítva (' + outcome.status + '):', item.payload.title);
+            queue.splice(idx, 1);
+            persistQueue();
+          } else {
+            const it = queue[idx];
+            it.attempts = (it.attempts || 0) + 1;
+            if (it.attempts >= SYNC_CONFIG.maxAttempts) {
+              console.warn('[Luna Sync] Maximális próbálkozás elérve, elem elhagyva:', it.payload.title);
+              queue.splice(idx, 1);
+            } else {
+              const backoff = Math.min(
+                SYNC_CONFIG.baseBackoffMs * Math.pow(2, Math.min(it.attempts, 10)),
+                SYNC_CONFIG.maxBackoffMs
+              );
+              it.nextAttempt = Date.now() + backoff;
+            }
+            persistQueue();
+          }
+        }
+      } catch (e) {
+        console.warn('[Luna Sync] Flush hiba:', e && e.message);
+      } finally {
+        flushing = false;
+      }
+    }
+
+    function scheduleFlush(delay) {
+      try { clearTimeout(debounceTimer); } catch (e) {}
+      debounceTimer = setTimeout(flushNow, delay);
+    }
+
+    function start() {
+      if (loopTimer) clearInterval(loopTimer);
+      loopTimer = setInterval(flushNow, SYNC_CONFIG.flushIntervalMs);
+
+      window.addEventListener('online', function () {
+        scheduleFlush(500);
+      });
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) scheduleFlush(500);
+      });
+
+      scheduleFlush(1000); // induláskor azonnal kiüríti a maradék sort
+      emitQueue();
+    }
+
+    return {
+      enqueue: enqueue,
+      start: start,
+      flushNow: flushNow,
+      deviceId: getDeviceId,
+      activeServer: function () {
+        const list = serverList();
+        return list[activeIndex()] || list[0] || '';
+      },
+      pendingCount: function () {
+        loadQueue();
+        return queue.length;
+      },
+      clearQueue: function () {
+        queue = [];
+        persistQueue();
+      },
+      onQueueChange: function (cb) { queueCb = cb; },
+      onAck: function (cb) { ackCb = cb; }
+    };
+  })();
+
   function buildPayload() {
+    const now = Date.now();
     return {
       title: state.title,
       episode: state.episode,
@@ -1012,93 +1329,35 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       source: state.source,
       sourceUrl: window.location.href,
       origin: window.location.hostname,
-      timestamp: Date.now()
+      timestamp: now,
+      eventId: uid(),
+      deviceId: SyncEngine.deviceId(),
+      clientTimestamp: now,
+      syncVersion: SYNC_VERSION
     };
-  }
-
-  function sendFetchSync(url, payload) {
-    try {
-      fetch(url, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        mode: 'cors',
-        body: JSON.stringify(payload)
-      })
-      .then(function(res) { return res.json(); })
-      .then(function(data) {
-        if (data && (data.success || data.action)) {
-          state.lastSync = Date.now();
-          state.cloudSyncOk = true;
-          updateSyncUI('✓ Felhőbe mentve: ' + (data.title || state.title) + ' (E' + state.episode + ')');
-        }
-      })
-      .catch(function(err) {
-        console.warn('[Luna Tracker] Fetch sync notice:', err.message);
-      });
-    } catch (err) {}
   }
 
   function broadcast() {
     const payload = buildPayload();
 
-    // 1. Cross-Domain HTTP Cloud Sync
-    const targetServer = getStoredServerUrl();
-    const syncUrl = targetServer.replace(/\\/$/, '') + '/api/sync';
+    // 1) Megbízható felhő-szinkron: először sorba, aztán küldés.
+    SyncEngine.enqueue(payload);
 
-    let httpSent = false;
-    try {
-      if (typeof GM_xmlhttpRequest === 'function') {
-        GM_xmlhttpRequest({
-          method: 'POST',
-          url: syncUrl,
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
-          data: JSON.stringify(payload),
-          timeout: 8000,
-          onload: function(resp) {
-            if (resp.status >= 200 && resp.status < 300) {
-              state.lastSync = Date.now();
-              state.cloudSyncOk = true;
-              updateSyncUI('✓ Felhőbe szinkronizálva (' + state.title + ')');
-            } else {
-              sendFetchSync(syncUrl, payload);
-            }
-          },
-          onerror: function() {
-            sendFetchSync(syncUrl, payload);
-          }
-        });
-        httpSent = true;
-      }
-    } catch (e) {}
-
-    if (!httpSent) {
-      sendFetchSync(syncUrl, payload);
-    }
-
-    // 2. BroadcastChannel
+    // 2) Helyi valós idejű hírcsatornák a website felé (kontraktus változatlan).
     try {
       if (bc) {
         bc.postMessage({ type: 'LUNA_ANIME_PROGRESS', anime: payload, ts: Date.now() });
       }
     } catch (e) {}
 
-    // 3. LocalStorage
     try {
       localStorage.setItem('luna_realtime_anime_sync', JSON.stringify({ type: 'LUNA_ANIME_PROGRESS', anime: payload, ts: Date.now() }));
     } catch (e) {}
 
-    // 4. Window PostMessage
     try {
       window.postMessage({ type: 'LUNA_ANIME_PROGRESS', anime: payload, ts: Date.now() }, '*');
     } catch (e) {}
 
-    state.lastSync = Date.now();
     state.syncCount++;
     updateSyncUI();
   }
@@ -1128,7 +1387,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     const panel = document.createElement('div');
     panel.className = 'luna-panel';
 
-    // Fejléc
     const header = document.createElement('div');
     header.className = 'luna-header';
     header.innerHTML = \`
@@ -1140,7 +1398,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     const actions = document.createElement('div');
     actions.className = 'luna-actions';
 
-    // ✏️ Ceruza gomb (Manuális felülbírálás toggle)
     const editBtn = document.createElement('button');
     editBtn.className = 'luna-icon-btn' + (state.editMode ? ' active' : '');
     editBtn.title = state.editMode ? 'Vissza az automatikus nézethez' : '✏️ Kézi felülbírálás / Cím & rész szerkesztése';
@@ -1154,7 +1411,16 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     });
     actions.appendChild(editBtn);
 
-    // Kicsinyítés gomb
+    const syncNowBtn = document.createElement('button');
+    syncNowBtn.className = 'luna-icon-btn';
+    syncNowBtn.title = '☁️ Szinkronizálás most (várakozó elemek küldése)';
+    syncNowBtn.textContent = '☁';
+    syncNowBtn.addEventListener('click', () => {
+      toast('Szinkronizálás indítása…');
+      SyncEngine.flushNow();
+    });
+    actions.appendChild(syncNowBtn);
+
     const minBtn = document.createElement('button');
     minBtn.className = 'luna-icon-btn';
     minBtn.title = 'Kicsinyítés (Mini Pill)';
@@ -1166,7 +1432,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     });
     actions.appendChild(minBtn);
 
-    // Bezárás gomb
     const closeBtn = document.createElement('button');
     closeBtn.className = 'luna-icon-btn';
     closeBtn.title = 'Elrejtés (Alt+L-lel visszahozható)';
@@ -1182,14 +1447,10 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     header.appendChild(actions);
     panel.appendChild(header);
 
-    // Törzs
     const body = document.createElement('div');
     body.className = 'luna-body';
 
     if (!state.editMode) {
-      /* =======================================================
-       * ALAPÉRTELMEZETT: TISZTA AUTOMATIKUS SZINKRONIZÁLÁSI NÉZET
-       * ======================================================= */
       const autoCard = document.createElement('div');
       autoCard.className = 'luna-auto-card';
 
@@ -1212,14 +1473,12 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       topRow.appendChild(editHint);
       autoCard.appendChild(topRow);
 
-      // Anime címe
       const titleEl = document.createElement('div');
       titleEl.className = 'luna-anime-title';
       titleEl.textContent = state.title;
       titleEl.title = state.title;
       autoCard.appendChild(titleEl);
 
-      // Epizód sor
       const epRow = document.createElement('div');
       epRow.className = 'luna-anime-ep-row';
       epRow.innerHTML = \`
@@ -1230,7 +1489,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
 
       body.appendChild(autoCard);
 
-      // Szinkronizációs sáv
       const syncBar = document.createElement('div');
       syncBar.className = 'luna-sync-bar';
       syncBar.innerHTML = \`
@@ -1241,17 +1499,14 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
         <span class="luna-sync-time"></span>
       \`;
       body.appendChild(syncBar);
+      els.syncDot = syncBar.querySelector('.luna-sync-dot');
       els.syncText = syncBar.querySelector('.luna-sync-text');
       els.syncTime = syncBar.querySelector('.luna-sync-time');
 
     } else {
-      /* =======================================================
-       * ✏️ CERUZA SZERKESZTŐ NÉZET (KÉZI FELÜLBÍRÁLÁS)
-       * ======================================================= */
       const form = document.createElement('div');
       form.className = 'luna-edit-form';
 
-      // Cím szerkesztés
       const titleWrap = document.createElement('div');
       titleWrap.innerHTML = \`<div class="luna-label">Anime címe (Kézi módosítás)</div>\`;
       const titleInput = document.createElement('input');
@@ -1265,7 +1520,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       titleWrap.appendChild(titleInput);
       form.appendChild(titleWrap);
 
-      // Epizód léptető
       const epWrap = document.createElement('div');
       epWrap.innerHTML = \`<div class="luna-label">Epizód száma</div>\`;
       const epRow = document.createElement('div');
@@ -1304,7 +1558,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       epWrap.appendChild(epRow);
       form.appendChild(epWrap);
 
-      // Státusz választó
       const statusWrap = document.createElement('div');
       statusWrap.innerHTML = \`<div class="luna-label">Státusz</div>\`;
       const statusSelect = document.createElement('select');
@@ -1323,7 +1576,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
       statusWrap.appendChild(statusSelect);
       form.appendChild(statusWrap);
 
-      // Gombok: Mentés & Visszaállítás
       const btnRow = document.createElement('div');
       btnRow.className = 'luna-edit-btns';
 
@@ -1367,7 +1619,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     pill.className = 'luna-pill';
 
     const dot = document.createElement('span');
-    dot.className = 'luna-pill-dot';
+    dot.className = 'luna-pill-dot' + ((state.pendingSync || 0) > 0 ? ' pending' : '');
     pill.appendChild(dot);
 
     const title = document.createElement('span');
@@ -1378,7 +1630,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
 
     const ep = document.createElement('span');
     ep.className = 'luna-pill-ep';
-    ep.textContent = 'E' + state.episode;
+    ep.textContent = (state.pendingSync > 0 ? '⏳' : '') + 'E' + state.episode;
     pill.appendChild(ep);
 
     const edit = document.createElement('button');
@@ -1410,34 +1662,34 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     makeDraggable(root, pill);
   }
 
-  /* ============================================================
-   * 7. ÁLLAPOTSOROK ÉS SZINKRON UI
-   * ============================================================ */
+  function formatTime(ms) {
+    const d = new Date(ms);
+    return String(d.getHours()).padStart(2, '0') +
+      ':' + String(d.getMinutes()).padStart(2, '0') +
+      ':' + String(d.getSeconds()).padStart(2, '0');
+  }
+
   function updateSyncUI(customMsg) {
     if (!els.syncText) return;
+    const pending = state.pendingSync || 0;
+
+    if (els.syncDot) {
+      els.syncDot.className = 'luna-sync-dot' + (pending > 0 ? ' pending' : '');
+    }
+
     if (customMsg) {
       els.syncText.textContent = customMsg;
+    } else if (pending > 0) {
+      els.syncText.textContent = '⏳ ' + pending + ' szinkron várakozik (auto újrapróbálás)';
     } else if (state.lastSync) {
-      const d = new Date(state.lastSync);
-      const time =
-        String(d.getHours()).padStart(2, '0') +
-        ':' +
-        String(d.getMinutes()).padStart(2, '0') +
-        ':' +
-        String(d.getSeconds()).padStart(2, '0');
-      els.syncText.textContent = 'Auto-szinkron aktív (' + state.title + ')';
-      if (els.syncTime) {
-        els.syncTime.textContent = time;
-      }
+      els.syncText.textContent = '✓ Szinkronizálva (' + state.title + ')';
+      if (els.syncTime) els.syncTime.textContent = formatTime(state.lastSync);
     } else {
       els.syncText.textContent = 'Auto-szinkron készenlétben';
       if (els.syncTime) els.syncTime.textContent = 'Most';
     }
   }
 
-  /* ============================================================
-   * 8. DRAG & DROP + POZÍCIÓ
-   * ============================================================ */
   function applyPosition() {
     const p = state.pos || { right: 20, bottom: 20 };
     root.style.top = '';
@@ -1500,9 +1752,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     });
   }
 
-  /* ============================================================
-   * 9. AUTOMATIKUS MENTÉS ÉS SZINKRONIZÁLÁS
-   * ============================================================ */
   function saveAndSync(withNotify) {
     Storage.set('last_anime', {
       title: state.title,
@@ -1514,7 +1763,7 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     broadcast();
     if (withNotify) {
       notify('🌙 Luna HUD', \`\${state.title} — \${state.episode}. rész mentve!\`);
-      toast('Szinkronizálva ✔ (' + state.title + ' - ' + state.episode + '. rész)');
+      toast('Szinkronizálás elküldve ✔ (' + state.title + ' - ' + state.episode + '. rész)');
     }
   }
 
@@ -1530,9 +1779,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     toastTimer = setTimeout(() => t.remove(), 2500);
   }
 
-  /* ============================================================
-   * 10. RENDER + GYORSBILLENTYŰK
-   * ============================================================ */
   function render() {
     root.innerHTML = '';
     if (state.hidden) {
@@ -1556,9 +1802,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     }
   });
 
-  /* ============================================================
-   * 11. DETEKCIÓ & INDÍTÁS (Automatikus Lejátszás & URL Követés)
-   * ============================================================ */
   function reDetect(force) {
     if (state.manualOverride && !force) {
       return;
@@ -1633,11 +1876,31 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
   function start() {
     injectCSS();
     (document.body || document.documentElement).appendChild(root);
+
+    // Szinkronmotor bekötése a HUD-ba
+    SyncEngine.onQueueChange(function (pending) {
+      state.pendingSync = pending;
+      updateSyncUI();
+      if (state.minimized && !state.hidden) {
+        // mini pill frissítése, ha épp az látszik
+        render();
+      }
+    });
+    SyncEngine.onAck(function (data, stillPending) {
+      state.lastSync = Date.now();
+      state.cloudSyncOk = true;
+      state.pendingSync = stillPending;
+      const label = data && data.title ? data.title : state.title;
+      updateSyncUI('✓ Felhőbe mentve: ' + label + ' (E' + (data && typeof data.episode === 'number' ? data.episode : state.episode) + ')');
+    });
+
+    SyncEngine.start();
+
     reDetect(true);
     render();
     hookVideos();
     saveAndSync(false);
-    toast('🌙 Luna Tracker aktív (Alt+L)');
+    toast('🌙 Luna Tracker v6 aktív (Alt+L)');
   }
 
   if (document.readyState === 'loading') {
@@ -1646,7 +1909,6 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
     start();
   }
 
-  // Menüparancsok
   try {
     if (typeof GM_registerMenuCommand === 'function') {
       GM_registerMenuCommand('🌙 Luna HUD megjelenítése / elrejtése', () => {
@@ -1662,6 +1924,29 @@ export const TAMPERMONKEY_USERSCRIPT_CODE_RAW = `// ==UserScript==
         state.manualOverride = false;
         reDetect(true);
         toast('Újrafelismerve ✔');
+      });
+      GM_registerMenuCommand('☁️ Szinkronizálás most', () => {
+        toast('Szinkronizálás indítása…');
+        SyncEngine.flushNow();
+      });
+      GM_registerMenuCommand('📊 Szinkron-sor állapota', () => {
+        const pending = SyncEngine.pendingCount();
+        const server = SyncEngine.activeServer();
+        notify('🌙 Luna Sync v6', pending > 0
+          ? \`\${pending} várakozó elem. Aktív szerver: \${server}\`
+          : \`Nincs várakozó elem, minden naprakész. Aktív szerver: \${server}\`);
+      });
+      GM_registerMenuCommand('🧹 Várakozó szinkronok törlése', () => {
+        const pending = SyncEngine.pendingCount();
+        if (pending === 0) {
+          toast('Nincs várakozó szinkron.');
+          return;
+        }
+        const ok = confirm(\`\${pending} várakozó szinkron törlése? Ezek az adatok el fognak veszni.\`);
+        if (ok) {
+          SyncEngine.clearQueue();
+          toast('Várakozó szinkronok törölve.');
+        }
       });
     }
   } catch (e) {}

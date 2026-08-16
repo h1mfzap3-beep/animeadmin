@@ -38,7 +38,7 @@ export const InstallGuide: React.FC = () => {
 
   // Triggers direct browser user.js download / Tampermonkey prompt
   const handleDirectUserscriptInstall = () => {
-    window.location.href = '/luna.user.js';
+    window.location.href = '/Luna-Anime-Tracker.user.js';
   };
 
   const chromeSteps = [

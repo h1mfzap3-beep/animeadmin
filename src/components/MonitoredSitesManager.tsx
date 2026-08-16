@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { 
   CustomMonitoredSite 
 } from '../types';
-import { 
-  getMonitoredSites, 
-  addCustomMonitoredSite, 
-  toggleSiteEnabled, 
-  deleteCustomSite, 
-  generateTampermonkeyUserscript,
-  DEFAULT_MONITORED_SITES 
+import {
+  getMonitoredSites,
+  addCustomMonitoredSite,
+  toggleSiteEnabled,
+  deleteCustomSite,
+  DEFAULT_MONITORED_SITES
 } from '../services/customSitesService';
+import { TAMPERMONKEY_USERSCRIPT_CODE } from '../data/tampermonkeyScript';
 import { 
   Globe, 
   Plus, 
@@ -97,7 +97,7 @@ export const MonitoredSitesManager: React.FC = () => {
     setNotes('');
   };
 
-  const userscriptCode = generateTampermonkeyUserscript(sites);
+  const userscriptCode = TAMPERMONKEY_USERSCRIPT_CODE;
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(userscriptCode);
@@ -326,10 +326,10 @@ export const MonitoredSitesManager: React.FC = () => {
             <div>
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
                 <Code2 className="w-5 h-5 text-cyan-400" />
-                Valós Idejű Tampermonkey Felhasználói Szkript (v3.0)
+                Kanonikus Luna Userscript (v6.0.0)
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Ez a kód automatikusan tartalmazza az összes fent beállított és egyéni weboldal szabályait.
+                Ez ugyanaz a kanonikus szkript, amit minden letöltési ponton (Dashboard, Telepítési útmutató) kapsz — megbízható sor-alapú felhőszinkronizációval. Az egyéni oldalaidat a szkript menüparancsával adhatod hozzá közvetlenül a böngészőben.
               </p>
             </div>
 
