@@ -10,29 +10,86 @@ ne térjen vissza.
 - **A GitHubon lévő `main` a kanonikus forrás.** Mielőtt bármit szerkesztesz, szinkronizáld
   vele a munkapéldányodat (clone/pull), és ne régebbi állapotból indulj.
 
-## AZONNALI TEENDŐK — amit a TULAJDONOSNAK kell megtennie (2026-08-16-ig meg nem történt)
+## AZONNALI TEENDŐK — a KÖVETKEZŐ AI feladata (2026-08-16-ig meg nem történt)
 
-A kód kész és GitHubon van, de a lenti két lépés nélkül **semmi nem fog működni**,
-mert az élő Firestore szabály még mindig mindent letilt:
+A kód kész és GitHubon van, de a lenti lépések nélkül **semmi nem fog működni**, mert az
+élő Firestore szabály még mindig mindent letilt (névtelen olvasás `PERMISSION_DENIED`,
+névtelen auth `ADMIN_ONLY_OPERATION`). Ezeket a lépéseket a következő AI-nak kell
+végrehajtania, vagy a tulajjal elvégeztetnie — a módszereket priority-sorrendben próbáld:
 
-1. **Firestore szabály publikálása** (kb. 2 perc, csak a tulaj Google-fiókjával mehet):
-   - Nyisd meg: `console.firebase.google.com` → projekt `gen-lang-client-0003317395`
-   - **Firestore Database** → felül az adatbázis-választóban válaszd ki az
-     `ai-studio-lunaanimetracker-5c5a6687-bf5d-4dc5-81e8-b9c87e1f2c97` nevű adatbázist
-     (fontos: NE az alapértelmezettet)
-   - **Rules** fül → a repo gyökerében lévő `firestore.rules` (a megszigorított v6.1.1-es
-     változat!) teljes tartalmát illeszd be → **Publish**
-   - Ellenőrzés: a Rules fülön a közzétett szabályban szerepeljen a
-     `hasOnly(syncManagedKeys())` és az `allow delete: if isSuperAdmin();`
-2. **Userscript frissítése v6.1.1-re**: nyisd meg
-   `https://raw.githubusercontent.com/h1mfzap3-beep/anime/main/Luna-Anime-Tracker.user.js`
-   → Tampermonkey felajánlja a frissítést (6.0.0 → 6.1.1).
-3. **Működés-ellenőrzés** (szabály publish után):
-   - nyiss egy támogatott anime oldalt és indíts egy epizódot → a HUD-ban
-     „✓ Felhőbe mentve" felirat jelenik meg,
-   - a weboldal listája (bejelentkezve) másodperceken belül frissül — szerver NEM kell hozzá,
-   - ha a HUD „⏳ N szinkron várakozik" állapotban ragad, a szabály nem publikálásra
-     (a böngésző konzoljában `PERMISSION_DENIED` látszik).
+### 1. Firestore szabály publikálása (a repo gyökerében lévő, megszigorított `firestore.rules`)
+
+**A. módszer — Firebase CLI (preferált, ha van terminel/jog a környezetedben):**
+
+```bash
+npm install -g firebase-tools
+firebase login            # a tulaj Google-fiókjával (h1mfzap3@gmail.com)
+```
+
+Hozz létre a repo gyökerében `firebase.json`-t (a nevesített adatbázishoz kell):
+
+```json
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "database": "ai-studio-lunaanimetracker-5c5a6687-bf5d-4dc5-81e8-b9c87e1f2c97"
+  }
+}
+```
+
+Majd:
+
+```bash
+firebase deploy --only firestore:rules --project gen-lang-client-0003317395
+```
+
+Figyelem: a `database` kulcs csak frissebb firebase-tools verziókban támogatott; ha a
+deploy mégis az alapértelmezett adatbázist írná, válts a B. módszerre.
+
+**B. módszer — firebaserules REST API** (ha van hozzáférési tokened a projekthez):
+
+1. `POST https://firebaserules.googleapis.com/v1/projects/gen-lang-client-0003317395/rulesets`
+   body: `{"source": {"files": [{"name": "firestore.rules", "content": "<a firestore.rules teljes tartalma>"}]}}`
+2. `POST https://firebaserules.googleapis.com/v1/projects/gen-lang-client-0003317395/releases`
+   body: `{"name": "cloud.firestore/ai-studio-lunaanimetracker-5c5a6687-bf5d-4dc5-81e8-b9c87e1f2c97", "rulesetName": "projects/gen-lang-client-0003317395/rulesets/<az 1. lépésben kapott id>"}`
+   (a nevesített adatbázis release-neve: `cloud.firestore/<databaseId>`)
+
+**C. módszer — ha semmilyen CLI/token-hozzáférésed nincs**: add a tulajnak a pontos
+konzol-útmutatót (kb. 2 perc):
+
+1. `console.firebase.google.com` → projekt `gen-lang-client-0003317395`
+2. **Firestore Database** → felül az adatbázis-választóban válaszd ki az
+   `ai-studio-lunaanimetracker-5c5a6687-bf5d-4dc5-81e8-b9c87e1f2c97` nevű adatbázist
+   (fontos: NE az alapértelmezettet)
+3. **Rules** fül → a repo gyökerében lévő `firestore.rules` (a megszigorított v6.1.1-es
+   változat!) teljes tartalmát illeszd be → **Publish**
+
+**A publikálás sikerességét ÍGY ellenőrizd** (ez a mérce, ne elégedj meg a „Deploy
+succeeded" üzenettel):
+
+```bash
+node scripts/verify-firestore-access.js
+```
+
+A szkript (Node 18+, függőség nélkül) végigmegy a userscript teljes útján: lista olvasása
+API-kulccsal → teszt dokumentum PATCH upsert → visszaolvasás → **névtelen DELETE, aminek
+403-nak KELL lennie** (ez bizonyítja, hogy a megszigorított szabály él, nem a régi).
+Ha minden lépés PASS, a szinkronút kész.
+
+### 2. Userscript frissítése v6.1.1-re a tulaj böngészőjében
+
+Ezt csak a tulaj tudja megtenni (bővítmény-kezelőben kattintás): nyissa meg
+`https://raw.githubusercontent.com/h1mfzap3-beep/anime/main/Luna-Anime-Tracker.user.js`
+→ a Tampermonkey felajánlja a frissítést (6.0.0 → 6.1.1). Ha a weboldalt újradeployolod
+az új beágyazott scripttel, az oldal saját letöltőgombja is a v6.1.1-et adja ki.
+
+### 3. Vég-ellenőrzés (mindkét lépés után)
+
+- nyiss egy támogatott anime oldalt és indíts egy epizódot → a HUD-ban
+  „✓ Felhőbe mentve" felirat jelenik meg,
+- a weboldal listája (bejelentkezve) másodperceken belül frissül — szerver NEM kell hozzá,
+- ha a HUD „⏳ N szinkron várakozik" állapotban ragad, a szabály nem publikálva
+  (a böngésző konzoljában `PERMISSION_DENIED` látszik).
 
 ## TEENDŐK A KÖVETKEZŐ AI-NAK — Firebase mint fő központ, Drive/Dropbox mint tükör
 
