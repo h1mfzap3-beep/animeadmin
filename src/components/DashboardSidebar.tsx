@@ -1,35 +1,37 @@
 import React from 'react';
-import { 
-  LayoutDashboard, 
-  Tv, 
-  PlusCircle, 
-  BarChart3, 
-  Zap, 
-  Code2, 
-  LogOut, 
-  Radio, 
+import {
+  LayoutDashboard,
+  Tv,
+  PlusCircle,
+  BarChart3,
+  Zap,
+  Code2,
+  LogOut,
+  Radio,
   ShieldCheck,
   Flame,
   Globe,
   Cloud,
   RefreshCw,
   GitMerge,
-  MonitorPlay
+  MonitorPlay,
+  Compass
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { ADMIN_EMAIL } from '../firebase/config';
 
-export type DashboardTab = 
-  | 'overview' 
-  | 'library' 
-  | 'quickadd' 
-  | 'sites' 
+export type DashboardTab =
+  | 'discover'
+  | 'overview'
+  | 'library'
+  | 'quickadd'
+  | 'sites'
   | 'virtualpanel'
-  | 'malsync' 
-  | 'conflicts' 
-  | 'cloudsync' 
-  | 'analytics' 
-  | 'integrations' 
+  | 'malsync'
+  | 'conflicts'
+  | 'cloudsync'
+  | 'analytics'
+  | 'integrations'
   | 'code';
 
 interface DashboardSidebarProps {
@@ -48,6 +50,13 @@ export const DashboardSidebar: React.FC<DashboardSidebarProps> = ({
   const { user, logout } = useAuth();
 
   const navItems = [
+    {
+      id: 'discover' as DashboardTab,
+      label: 'Felfedezés',
+      sublabel: 'Kezdőlap & Folytatás',
+      icon: Compass,
+      badge: 'Új',
+    },
     {
       id: 'overview' as DashboardTab,
       label: 'Vezérlőpult',

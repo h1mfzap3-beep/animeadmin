@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthLoginScreen } from './components/AuthLoginScreen';
 import { DashboardSidebar, DashboardTab } from './components/DashboardSidebar';
 import { DashboardHeader } from './components/DashboardHeader';
+import { DiscoverHome } from './components/DiscoverHome';
 import { DashboardOverview } from './components/DashboardOverview';
 import { DashboardLibrary } from './components/DashboardLibrary';
 import { DashboardAnalytics } from './components/DashboardAnalytics';
@@ -23,7 +24,7 @@ function DashboardApp() {
   const { user, isAdmin, isAuthReady } = useAuth();
   const [tracks, setTracks] = useState<AnimeTrack[]>([]);
   const [isLoadingTracks, setIsLoadingTracks] = useState<boolean>(true);
-  const [currentTab, setCurrentTab] = useState<DashboardTab>('overview');
+  const [currentTab, setCurrentTab] = useState<DashboardTab>('discover');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
   // Realtime Live Stream Alerts
@@ -123,6 +124,8 @@ function DashboardApp() {
 
   const getTabTitle = (tab: DashboardTab) => {
     switch (tab) {
+      case 'discover':
+        return { title: 'Felfedezés', subtitle: 'Folytasd a nézést, ahol abbahagytad — tiszta, modern kezdőlap' };
       case 'overview':
         return { title: 'Vezérlőpult & Áttekintés', subtitle: 'Folytatás, legújabb epizódok és kulcsfontosságú mutatók' };
       case 'library':
@@ -241,6 +244,16 @@ function DashboardApp() {
         )}
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+          {currentTab === 'discover' && (
+            <DiscoverHome
+              tracks={tracks}
+              isLoading={isLoadingTracks}
+              onOpenAddModal={handleOpenAddModal}
+              onOpenEditModal={handleOpenEditModal}
+              onNavigateTab={setCurrentTab}
+            />
+          )}
+
           {currentTab === 'overview' && (
             <DashboardOverview
               tracks={tracks}
