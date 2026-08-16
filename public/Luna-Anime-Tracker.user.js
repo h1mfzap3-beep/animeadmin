@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Luna Anime Tracker HUD
 // @namespace    https://luna.tracker.local/
-// @version      6.0.0
-// @description  Intelligens automatikus anime szinkronizálás és lebegő HUD magyar és nemzetközi anime oldalakhoz. Megbízható felhő-szinkron: perzisztens várakozási sor, automatikus újrapróbálás, szerver-feladatváltás.
+// @version      6.1.0
+// @description  Intelligens automatikus anime szinkronizálás és lebegő HUD magyar és nemzetközi anime oldalakhoz. Megbízható felhő-szinkron: KOZVETLEN Firestore írás (a weboldal azonnal látja), perzisztens várakozási sor, automatikus újrapróbálás, szerver-tartalék.
 // @author       Luna
 // @match        *://*.magyaranime.eu/*
 // @match        *://*.magyaranime.hu/*
@@ -57,6 +57,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @connect      *
+// @connect      firestore.googleapis.com
 // @connect      run.app
 // @connect      localhost
 // @run-at       document-start
@@ -981,25 +982,36 @@
   }
 
   /* ============================================================
-   * 5. MEGbíZHATÓ FELHŐ-SZINKRONIZÁCIÓ (v6)
+   * 5. MEGbíZHATÓ FELHŐ-SZINKRONIZÁCIÓ (v6.1)
    * ------------------------------------------------------------
    * Design:
+   *   - ELSŐDLEGES ÚTVONAL: közvetlen Firestore REST írás (API kulccsal,
+   *     a firestore.rules az anime_tracks kollekciót auth nélkül engedi).
+   *     Így NEM kell hozzá sem Express szerver, sem deploy — a weboldal
+   *     élő onSnapshot előfizetése azonnal megkapja az új állapotot.
+   *   - TARTALÉK ÚTVONAL: ha a Firestore írás nem megy (pl. a szabályok
+   *     megváltoznak), a régi /api/sync szervereket próbálja sorban.
    *   - Minden epizód-frissítés ELŐSZÖR perzisztens várakozási sorba
    *     kerül (GM_setValue / localStorage), és csak utána indul a küldés.
-   *     Egy sikertelen POST így SOSEM vesz el adatot.
-   *   - Több szerver-jelölt közül sorban próbálkozik (custom URL +
-   *     beépített szerverek), és megjegyzi, melyik válaszolt utoljára.
+   *     Egy sikertelen küldés így SOSEM vesz el adatot.
    *   - Sikertelen küldésnél exponenciális backoff (15s -> 5 perc),
    *     20 másodpercenkénti automata flush ciklussal.
    *   - 'online' böngésző-eseményre és fül visszaváltásra azonnal
    *     újrapróbálkozik.
-   *   - Minden esemény egyedi eventId-vel és clientTimestamp-pel indul,
-   *     a szerver így idempotens lehet (duplikáció-szűrés) és
-   *     last-write-wins ütközéskezelést tud végezni.
+   *   - Minden esemény egyedi eventId-vel és clientTimestamp-pel indul;
+   *     a Firestore írás is last-write-wins ütközéskezelést végez
+   *     (a régebbi esemény nem írja felül az újabbat).
    *   - Ugyanarra a címre vonatkozó sorban álló frissítések összeolvadnak
    *     (coalesce): mindig csak a legfrissebb állapot vár küldésre.
    * ============================================================ */
   const SYNC_VERSION = 6;
+
+  // Ugyanaz a Firebase projekt, amit a weboldal használ (src/firebase/config.ts)
+  const FIRESTORE_CONFIG = {
+    projectId: 'gen-lang-client-0003317395',
+    databaseId: 'ai-studio-lunaanimetracker-5c5a6687-bf5d-4dc5-81e8-b9c87e1f2c97',
+    apiKey: 'AIzaSyBT6F3vhAO_P-wb_PosgULeT-D-zwR0Mjo'
+  };
 
   const DEFAULT_CLOUD_SERVERS = [
     'https://ais-dev-haau57gidvc74j2nnjloyk-452811031712.europe-west2.run.app',
@@ -1126,21 +1138,19 @@
 
     // Egy HTTP kérés ígéret formájában. GM_xmlhttpRequest-t használ, ha
     // elérhető (CORS-mentes), különben sima fetch fallbackkel.
-    function httpRequest(url, payload) {
+    function httpRequest(method, url, payload) {
       return new Promise((resolve) => {
-        const body = JSON.stringify(payload);
+        const body = payload === null || payload === undefined ? null : JSON.stringify(payload);
         const done = (ok, status, data) => resolve({ ok, status, data });
 
         if (typeof GM_xmlhttpRequest === 'function') {
           try {
-            GM_xmlhttpRequest({
-              method: 'POST',
+            const opts = {
+              method: method,
               url: url,
               headers: {
-                'Content-Type': 'application/json',
                 'Accept': 'application/json'
               },
-              data: body,
               timeout: SYNC_CONFIG.requestTimeoutMs,
               onload: function (resp) {
                 let data = null;
@@ -1149,7 +1159,12 @@
               },
               onerror: function () { done(false, 0, null); },
               ontimeout: function () { done(false, 0, null); }
-            });
+            };
+            if (body !== null) {
+              opts.headers['Content-Type'] = 'application/json';
+              opts.data = body;
+            }
+            GM_xmlhttpRequest(opts);
             return;
           } catch (e) {
             /* esés a fetch fallbackre */
@@ -1167,13 +1182,12 @@
         } catch (e) {}
 
         fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
+          method: method,
+          headers: body !== null
+            ? { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+            : { 'Accept': 'application/json' },
           mode: 'cors',
-          body: body,
+          body: body === null ? undefined : body,
           signal: signal
         })
           .then(function (res) {
@@ -1186,11 +1200,189 @@
       });
     }
 
-    // Egy elem kipróbálása a szerverlistán. Visszatérési értékek:
-    //   'ack'   — a szerver visszaigazolta (updated/created/duplicate/skipped_stale)
+    /* ---- KOZVETLEN FIRESTORE REST UTVONAL (elsodleges) ---- */
+
+    const FS_ROOT = 'https://firestore.googleapis.com/v1/projects/' +
+      FIRESTORE_CONFIG.projectId + '/databases/' +
+      encodeURIComponent(FIRESTORE_CONFIG.databaseId) + '/documents';
+
+    let fsTracksCache = { at: 0, list: null };
+
+    // Firestore tipusost (stringValue / integerValue / ...) sima erteke alakit
+    function fsUntype(v) {
+      if (!v || typeof v !== 'object') return undefined;
+      if (typeof v.stringValue === 'string') return v.stringValue;
+      if (typeof v.integerValue !== 'undefined') return parseInt(v.integerValue, 10);
+      if (typeof v.doubleValue !== 'undefined') return Number(v.doubleValue);
+      if (typeof v.booleanValue !== 'undefined') return !!v.booleanValue;
+      if (v.timestampValue) return v.timestampValue;
+      if (v.arrayValue && Array.isArray(v.arrayValue.values)) {
+        return v.arrayValue.values.map(function (x) { return fsUntype(x); });
+      }
+      return undefined;
+    }
+
+    // Sima ertek Firestore tipusost mezo alakit
+    function fsTyped(v) {
+      if (v === null || v === undefined) return null;
+      if (typeof v === 'boolean') return { booleanValue: v };
+      if (typeof v === 'number') {
+        return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+      }
+      if (Array.isArray(v)) {
+        return { arrayValue: { values: v.map(function (x) { return fsTyped(x); }) } };
+      }
+      return { stringValue: String(v) };
+    }
+
+    // Ugyanaz a determinisztikus ID, amit a server.ts generateSafeTrackId-je
+    function fsSafeTrackId(title) {
+      const normalized = String(title || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+      return normalized || ('anime_' + Date.now());
+    }
+
+    // Ugyanaz a normalizalt cim-osszehasonlitas, mint a szerveren
+    function fsNormalizeForCompare(s) {
+      return String(s || '').toLowerCase().replace(/[^a-z0-9áéíóöőúüű]/gi, '').trim();
+    }
+
+    // Kollekció listázása (60 mp cache) a cím -> docId párosításhoz
+    function fsListTracks(force) {
+      if (!force && fsTracksCache.list && Date.now() - fsTracksCache.at < 60000) {
+        return Promise.resolve(fsTracksCache.list);
+      }
+      const url = FS_ROOT + '/anime_tracks?pageSize=300&key=' + FIRESTORE_CONFIG.apiKey;
+      return httpRequest('GET', url, null).then(function (r) {
+        if (!r.ok || !r.data || !Array.isArray(r.data.documents)) {
+          return null; // hiba — a hívó a tartalék szerverekre esik vissza
+        }
+        const list = r.data.documents.map(function (d) {
+          const nameParts = String(d.name || '').split('/');
+          return {
+            docId: nameParts[nameParts.length - 1],
+            title: fsUntype(d.fields && d.fields.title) || '',
+            lastClientTimestamp: fsUntype(d.fields && d.fields.lastClientTimestamp)
+          };
+        });
+        fsTracksCache = { at: Date.now(), list: list };
+        return list;
+      });
+    }
+
+    // Közvetlen upsert a Firestore-ba. Visszatérési értékek a sendItem
+    // konvenciója szerint: 'ack' (created/updated/skipped_stale) vagy 'retry'.
+    function fsUpsertTrack(payload) {
+      return fsListTracks(false).then(function (list) {
+        if (list === null) return { result: 'retry', server: 'firestore' };
+
+        const targetNorm = fsNormalizeForCompare(payload.title);
+        const safeId = fsSafeTrackId(payload.title);
+        const cleanTitle = String(payload.title || '').toLowerCase().trim();
+
+        let docId = null;
+        let existingTs = undefined;
+        for (const t of list) {
+          const itemNorm = fsNormalizeForCompare(t.title);
+          if (t.docId === safeId ||
+              (t.title && t.title.toLowerCase().trim() === cleanTitle) ||
+              (targetNorm.length > 2 && itemNorm === targetNorm)) {
+            docId = t.docId;
+            existingTs = t.lastClientTimestamp;
+            break;
+          }
+        }
+        const isNew = !docId;
+        if (isNew) docId = safeId;
+
+        // Last-write-wins: az 5 s-nél régebbi esemény ne írja felül az újabbat
+        if (!isNew && typeof existingTs === 'number' &&
+            typeof payload.clientTimestamp === 'number' &&
+            existingTs - payload.clientTimestamp > 5000) {
+          return {
+            result: 'ack',
+            server: 'firestore',
+            data: { action: 'skipped_stale', title: payload.title, episode: payload.episode }
+          };
+        }
+
+        let status = payload.status || 'watching';
+        if (payload.totalEpisodes && payload.episode >= payload.totalEpisodes) {
+          status = 'completed';
+        }
+
+        const nowIso = new Date().toISOString();
+        const fields = {
+          id: docId,
+          title: payload.title,
+          episode: payload.episode,
+          status: status,
+          source: payload.source || 'Egyéb',
+          sourceUrl: payload.sourceUrl || '',
+          lastWatchedUrl: payload.sourceUrl || '',
+          updatedAt: nowIso,
+          syncedFromExtension: true,
+          lastSyncOrigin: payload.origin || 'userscript',
+          lastSyncEventId: payload.eventId || '',
+          lastClientTimestamp: payload.clientTimestamp || Date.now(),
+          syncDeviceId: payload.deviceId || 'unknown',
+          syncVersion: payload.syncVersion || SYNC_VERSION
+        };
+        if (payload.totalEpisodes) {
+          fields.totalEpisodes = payload.totalEpisodes;
+        }
+
+        if (isNew) {
+          fields.createdAt = nowIso;
+          fields.coverImage = 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=600&q=80';
+          fields.rating = 9.0;
+          fields.notes = 'Automatikusan szinkronizálva: ' + (payload.source || 'ismeretlen forrás') + ' (' + new Date().toLocaleDateString('hu-HU') + ')';
+          fields.genres = ['Anime', 'Szinkronizált'];
+        }
+
+        const fieldNames = Object.keys(fields);
+        const url = FS_ROOT + '/anime_tracks/' + encodeURIComponent(docId) +
+          '?key=' + FIRESTORE_CONFIG.apiKey +
+          fieldNames.map(function (n) { return '&updateMask.fieldPaths=' + encodeURIComponent(n); }).join('');
+
+        const body = { fields: {} };
+        for (const n of fieldNames) {
+          body.fields[n] = fsTyped(fields[n]);
+        }
+
+        return httpRequest('PATCH', url, body).then(function (r) {
+          if (r.ok) {
+            fsTracksCache.at = 0; // a következő olvasás friss listát hozzon
+            return {
+              result: 'ack',
+              server: 'firestore',
+              data: { action: isNew ? 'created' : 'updated', title: payload.title, episode: payload.episode }
+            };
+          }
+          console.warn('[Luna Sync] Firestore REST válasz:', r.status, r.data && r.data.error && r.data.error.message);
+          return { result: 'retry', server: 'firestore', status: r.status };
+        });
+      });
+    }
+
+    // Egy elem kiküldése: először közvetlen Firestore, aztán a /api/sync
+    // szerverek sorban. Visszatérési értékek:
+    //   'ack'   — visszaigazolva (created/updated/duplicate/skipped_stale)
     //   'drop'  — végleges elutasítás (4xx): nincs értelme újrapróbálni
     //   'retry' — hálózati/szerverhiba: később újra kell próbálni
     function sendItem(item) {
+      return fsUpsertTrack(item.payload).then(function (fsOutcome) {
+        if (fsOutcome.result === 'ack') return fsOutcome;
+        return sendViaServers(item);
+      });
+    }
+
+    function sendViaServers(item) {
       const list = serverList();
       const start = activeIndex();
 
@@ -1199,7 +1391,7 @@
         const base = list[idx];
         const url = base.replace(/\/+$/, '') + '/api/sync';
 
-        return httpRequest(url, item.payload).then(function (r) {
+        return httpRequest('POST', url, item.payload).then(function (r) {
           if (r.ok && r.data && (r.data.success === true || r.data.action)) {
             setActiveIndex(idx);
             return { result: 'ack', server: base, data: r.data };
@@ -1898,7 +2090,7 @@
     render();
     hookVideos();
     saveAndSync(false);
-    toast('🌙 Luna Tracker v6 aktív (Alt+L)');
+    toast('🌙 Luna Tracker v6.1 aktív (Alt+L)');
   }
 
   if (document.readyState === 'loading') {
@@ -1930,9 +2122,9 @@
       GM_registerMenuCommand('📊 Szinkron-sor állapota', () => {
         const pending = SyncEngine.pendingCount();
         const server = SyncEngine.activeServer();
-        notify('🌙 Luna Sync v6', pending > 0
-          ? `${pending} várakozó elem. Aktív szerver: ${server}`
-          : `Nincs várakozó elem, minden naprakész. Aktív szerver: ${server}`);
+        notify('🌙 Luna Sync v6.1', pending > 0
+          ? `${pending} várakozó elem. Útvonal: közvetlen Firestore (tartalék: ${server})`
+          : `Nincs várakozó elem, minden naprakész. Útvonal: közvetlen Firestore (tartalék: ${server})`);
       });
       GM_registerMenuCommand('🧹 Várakozó szinkronok törlése', () => {
         const pending = SyncEngine.pendingCount();

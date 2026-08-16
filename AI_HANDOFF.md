@@ -1,15 +1,47 @@
 # Handoff a következő AI-nak — Luna Anime Tracker állapotváltozás és kezelési szabályok
 
-Dátum: 2026-08-16. Ez a dokumentum leírja, mi változott a projektben a legutóbbi két
-commitban, és hogy hogyan kell ezeket kezelni, hogy a szinkronizálási hiba ne térjen vissza.
+Dátum: 2026-08-16 (v6.1 frissítés). Ez a dokumentum leírja, mi változott a projektben,
+és hogy hogyan kell ezeket kezelni, hogy a szinkronizálási hiba ne térjen vissza.
 
 ## Kiindulási állapot
 
 - Repo: `h1mfzap3-beep/animeadmin` (privát), branch: `main`
-- Aktuális HEAD: `a826254` — Add Discover home: Kumo/Grok/Apple-style landing view wired to real data
-- Előzmény commit: `98f709f` — Luna Sync v6.0.0: single-source userscript with reliable queue/retry/failover sync
 - **A GitHubon lévő `main` a kanonikus forrás.** Mielőtt bármit szerkesztesz, szinkronizáld
   vele a munkapéldányodat (clone/pull), és ne régebbi állapotból indulj.
+
+## 0. Luna Sync v6.1 — KÖZVETLEN FIRESTORE ÍRÁS (legfrissebb változás)
+
+A userscript `@version 6.1.0`-ra frissült. Az új elsődleges szinkronútvonal:
+
+1. A script a `firestore.googleapis.com` REST API-ra ír **közvetlenül** (GET kollekció →
+   cím alapján docId-párosítás → PATCH upsert `updateMask`-kal), a
+   `FIRESTORE_CONFIG`-ban megadott projektben (`gen-lang-client-0003317395`, database
+   `ai-studio-lunaanimetracker-5c5a6687-bf5d-4dc5-81e8-b9c87e1f2c97`).
+2. A weboldalnak **nem kell hozzá semmi** — a `subscribeToAnimeTracks` onSnapshot
+   előfizetés azonnal megkapja a REST írásokkal bekikerült állapotot.
+3. A régi `/api/sync` Express szerverek csak **tartalékútvonalként** maradtak bent
+   (`sendViaServers`): ha a Firestore írás nem ack, arra esik vissza.
+4. A last-write-wins kliens oldalon is megvan: a script a meglévő dokumentum
+   `lastClientTimestamp` mezőjével hasonlítja össze a bejövő eseményt (5 s tolerancia).
+
+### KRITIKUS: a Firestore szabályokat telepíteni kell
+
+Az élő Firestore rules jelenleg **minden hitelesítetlen hozzáférést letilt**
+(PERMISSION_DENIED), ezért nem connectelt korábban semmi. A repo gyökerében lévő
+`firestore.rules` fájl már tartalmazza a helyes, nyitott szabályt az `anime_tracks`
+kollekcióra (publikus olvasás + validált írás). **Ezt deployolni kell** Firebase
+Consoleban: Firestore Database → (adatbázis-választóban az `ai-studio-lunaanimetracker-…`
+nevű DB) → Rules → a repobeli tartalom beillesztése → Publish. Alternatíva:
+`firebase deploy --only firestore:rules`. A szabály Deploy után a v6.1 script azonnal
+működik, szerver és újratelepítés nélkül is (a script frissítése azért kell: v6.1).
+
+A `config.ts` / `server.ts` fallback API-kulcsa és a `firebase-applet-config.json`
+kulcsa: `AIzaSyBT6F3vhAO_P-wb_PosgULeT-D-zwR0Mjo` (a `-D-` karakter a helyes — van
+egy hosszú `-T-`-s elírt változat keringősen, az NEM érvényes az Identity Toolkithez).
+
+Megjegyzés: a projektben az anonymous auth le van tiltva (ADMIN_ONLY_OPERATION),
+ezért nem elégszer token nélkül írni — a nyitott `anime_tracks` szabály a megoldás,
+pontosan úgy, ahogy a régi Express szerver is korlátlanul fogadta a POST-okat.
 
 ## 1. Szinkronizálási rebuild (commit 98f709f)
 
