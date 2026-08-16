@@ -38,7 +38,25 @@ export const InstallGuide: React.FC = () => {
 
   // Triggers direct browser user.js download / Tampermonkey prompt
   const handleDirectUserscriptInstall = () => {
-    window.location.href = '/Luna-Anime-Tracker.user.js';
+    // If inside an iframe (AI Studio preview), window.open or direct location may be restricted
+    const githubRawUrl = 'https://raw.githubusercontent.com/h1mfzap3-beep/anime/main/Luna-Anime-Tracker.user.js';
+    try {
+      window.open(githubRawUrl, '_blank');
+    } catch {
+      window.location.href = '/Luna-Anime-Tracker.user.js';
+    }
+  };
+
+  const handleDownloadFile = () => {
+    const blob = new Blob([TAMPERMONKEY_USERSCRIPT_CODE], { type: 'application/javascript;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Luna-Anime-Tracker.user.js';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const chromeSteps = [
@@ -179,20 +197,31 @@ export const InstallGuide: React.FC = () => {
               </div>
 
               <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0 w-full md:w-auto">
-                <button
-                  onClick={handleDirectUserscriptInstall}
+                <a
+                  href="https://raw.githubusercontent.com/h1mfzap3-beep/anime/main/Luna-Anime-Tracker.user.js"
+                  target="_blank"
+                  rel="noreferrer"
                   id="tampermonkey-install-btn"
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/30 transition-all cursor-pointer"
+                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/30 transition-all cursor-pointer no-underline"
                 >
                   <Zap className="w-4 h-4 text-black" />
                   <span>1-Kattintásos Telepítés (.user.js)</span>
+                </a>
+
+                <button
+                  onClick={handleDownloadFile}
+                  className="w-full sm:w-auto px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  title="Fájl letöltése (.user.js)"
+                >
+                  <Download className="w-4 h-4 text-cyan-400" />
+                  <span>Letöltés</span>
                 </button>
 
                 <button
                   onClick={copyUserscript}
-                  className="w-full sm:w-auto px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono text-xs flex items-center justify-center gap-2 transition-colors"
+                  className="w-full sm:w-auto px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-mono text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
-                  {copiedScript ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                  {copiedScript ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-300" />}
                   <span>{copiedScript ? 'Másolva!' : 'Kód Másolása'}</span>
                 </button>
               </div>

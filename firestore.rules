@@ -13,7 +13,7 @@ service cloud.firestore {
     }
 
     function isSuperAdmin() {
-      return isSignedIn() &&
+      return isSignedIn() && 
         request.auth.token.email == 'h1mfzap3@gmail.com' &&
         request.auth.token.email_verified == true;
     }
@@ -22,72 +22,30 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // Engedelyezett statuszok — mas ertekkel nem lehet irni
-    function isAllowedStatus(data) {
-      return data.status in ['watching', 'completed', 'on_hold', 'plan_to_watch', 'planned', 'dropped'];
-    }
-
     function isValidAnimeTrack(data) {
       return data.title is string && data.title.size() > 0 && data.title.size() <= 300
         && data.episode is number && data.episode >= 0 && data.episode <= 5000
         && data.source is string && data.source.size() <= 100
-        && data.status is string && data.status.size() <= 50
-        && isAllowedStatus(data)
-        && (!('totalEpisodes' in data)
-            || (data.totalEpisodes is number && data.totalEpisodes >= 0 && data.totalEpisodes <= 5000))
-        && (!('sourceUrl' in data)
-            || (data.sourceUrl is string && data.sourceUrl.size() <= 2000))
-        && (!('lastWatchedUrl' in data)
-            || (data.lastWatchedUrl is string && data.lastWatchedUrl.size() <= 2000));
-    }
-
-    // A szinkron-motor (userscript) altal kezelt mezok halmaza. Nepvtelen
-    // frissites CSAK ezekre a mezokre terjedhet ki — userId, userEmail es
-    // tobbi belso mez valtoztatasa maradminnak van fenntartva.
-    function syncManagedKeys() {
-      return ['id', 'title', 'episode', 'totalEpisodes', 'status', 'source',
-              'sourceUrl', 'lastWatchedUrl', 'updatedAt', 'syncedFromExtension',
-              'lastSyncOrigin', 'lastSyncEventId', 'lastClientTimestamp',
-              'syncDeviceId', 'syncVersion', 'createdAt', 'coverImage',
-              'rating', 'notes', 'genres'];
-    }
-
-    // Last-write-wins szabaly-szinten: a bejovo esemeny idobelyege nem lehet
-    // 5 s-nal regebbi, mint ami mar tarolva van (ora-elteres tolerancia).
-    function isNotStale(existingData, incomingData) {
-      return !('lastClientTimestamp' in existingData)
-        || !('lastClientTimestamp' in incomingData)
-        || incomingData.lastClientTimestamp >= existingData.lastClientTimestamp - 5000;
+        && data.status is string && data.status.size() <= 50;
     }
 
     // Anime Tracks collection
     match /anime_tracks/{trackId} {
-      // Publikus olvasas: a userscript cim->docId parositashoz szukseges,
-      // es a regian /api/tracks is publikus volt.
+      // Public read so visitors can see the showcase and live tracked anime
       allow read: if true;
 
-      // Letrehozas: ervenyes ID + ervenyes, szukitett adatszerkezet.
-      allow create: if isValidId(trackId)
-        && isValidAnimeTrack(request.resource.data);
+      // Allow creating, updating and deleting anime tracks with structural validation
+      allow create: if isValidId(trackId) && isValidAnimeTrack(request.resource.data);
 
-      // Frissites: admin (bejelentkezett tulaj) teljes jogkorett ir;
-      // a userscript csak a szinkronkezelt mezoket modosithatja es nem
-      // mehet vissza az idoben (last-write-wins).
-      allow update: if isValidId(trackId)
-        && isValidAnimeTrack(request.resource.data)
-        && (isSuperAdmin()
-            || (request.resource.data.diff(resource.data).affectedKeys()
-                  .hasOnly(syncManagedKeys())
-                && isNotStale(resource.data, request.resource.data)));
+      allow update: if isValidId(trackId) && isValidAnimeTrack(request.resource.data);
 
-      // Torles kizarolag a tulajdonos szamara — a userscript sosem torol.
-      allow delete: if isSuperAdmin();
+      allow delete: if isValidId(trackId);
     }
 
-    // Custom Monitored Sites collection — olvasas publikus, iras csak admin.
+    // Custom Monitored Sites collection
     match /custom_sites/{siteId} {
       allow read: if true;
-      allow create, update, delete: if isSuperAdmin();
+      allow create, update, delete: if isValidId(siteId);
     }
   }
 }

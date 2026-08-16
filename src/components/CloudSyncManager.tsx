@@ -49,6 +49,11 @@ import {
   isDriveConnected
 } from '../services/googleDriveService';
 import { importAnimeTracks, clearAllAnimeTracks } from '../services/firestoreService';
+import { 
+  subscribeToAutoBackupStatus, 
+  executeAutoBackup, 
+  AutoBackupMetadata 
+} from '../services/autoBackupService';
 import { auth } from '../firebase/config';
 
 interface CloudSyncManagerProps {
@@ -75,6 +80,10 @@ export const CloudSyncManager: React.FC<CloudSyncManagerProps> = ({
   const [dropboxToken, setDropboxToken] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  
+  // Auto-backup live mirror state
+  const [autoBackupMeta, setAutoBackupMeta] = useState<AutoBackupMetadata | null>(null);
+  const [isTriggeringAutoBackup, setIsTriggeringAutoBackup] = useState<boolean>(false);
   
   // Restore State
   const [restoreMode, setRestoreMode] = useState<'merge' | 'replace'>('merge');
@@ -122,7 +131,15 @@ export const CloudSyncManager: React.FC<CloudSyncManagerProps> = ({
       loadDriveBackupsList();
     }
 
-    return () => unsubscribe();
+    // Subscribe to auto-backup mirror metadata
+    const unsubAutoBackup = subscribeToAutoBackupStatus((meta) => {
+      setAutoBackupMeta(meta);
+    });
+
+    return () => {
+      unsubscribe();
+      unsubAutoBackup();
+    };
   }, []);
 
   const loadDriveBackupsList = async (token?: string) => {
@@ -283,6 +300,34 @@ export const CloudSyncManager: React.FC<CloudSyncManagerProps> = ({
     }
   };
 
+  const handleTriggerAutoBackupNow = async () => {
+    setIsTriggeringAutoBackup(true);
+    setSyncStatus(null);
+    try {
+      const res = await executeAutoBackup(tracks, 'manual_trigger');
+      if (res.success && res.providersSynced.length > 0) {
+        setSyncStatus({
+          type: 'success',
+          message: `✅ Automata felhőtükrözés sikeres: ${res.providersSynced.map(p => p === 'google_drive' ? 'Google Drive' : 'Dropbox').join(', ')} (${tracks.length} anime tükrözve).`
+        });
+      } else if (res.errors.length > 0) {
+        setSyncStatus({
+          type: 'error',
+          message: `Felhőtükrözési hiba: ${res.errors.join('; ')}`
+        });
+      } else {
+        setSyncStatus({
+          type: 'info',
+          message: 'Nincs aktív Google Drive vagy Dropbox kapcsolat. Jelentkezz be vagy adj meg tokent a tükrözéshez!'
+        });
+      }
+    } catch (e: any) {
+      setSyncStatus({ type: 'error', message: `Hiba a tükrözés futtatásakor: ${e.message}` });
+    } finally {
+      setIsTriggeringAutoBackup(false);
+    }
+  };
+
   // Local JSON File Upload & Restore
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -375,7 +420,7 @@ export const CloudSyncManager: React.FC<CloudSyncManagerProps> = ({
             Közvetlen Google Drive & Dropbox Felhőmentő Központ
           </h2>
           <p className="text-slate-400 text-xs sm:text-sm">
-            Mentsd el a teljes anime adatbázisodat a saját Google Drive fiókodba 1-kattintással, és állítsd vissza bármikor.
+            A Firestore (<span className="text-cyan-300 font-mono">anime_tracks</span>) a rendszer egyetlen igazságforrása. A Google Drive és Dropbox automatikus háttértükörként működnek.
           </p>
         </div>
 
@@ -389,6 +434,61 @@ export const CloudSyncManager: React.FC<CloudSyncManagerProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Auto-Backup Mirror Status Widget */}
+      <div className="p-5 rounded-3xl bg-white/[0.02] border border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center shrink-0">
+            <Cloud className="w-5 h-5 text-cyan-400" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-bold text-white">Automata Felhőtükrözés (Auto-Backup Engine)</h4>
+              <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                autoBackupMeta?.status === 'running'
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                  : autoBackupMeta?.lastAutoBackupAt
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+              }`}>
+                {autoBackupMeta?.status === 'running' 
+                  ? '⏳ Tükrözés folyamatban...' 
+                  : autoBackupMeta?.lastAutoBackupAt 
+                  ? '✓ Aktív (24h / 10 módosítás)' 
+                  : 'Várakozás csatlakozásra'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {autoBackupMeta?.lastAutoBackupAt ? (
+                <>
+                  Legutóbbi tükrözés: <span className="text-slate-200 font-mono">{new Date(autoBackupMeta.lastAutoBackupAt).toLocaleString('hu-HU')}</span> ({autoBackupMeta.lastAutoBackupProvider === 'both' ? 'Google Drive & Dropbox' : autoBackupMeta.lastAutoBackupProvider === 'google_drive' ? 'Google Drive' : autoBackupMeta.lastAutoBackupProvider === 'dropbox' ? 'Dropbox' : 'Egyik sem'}, {autoBackupMeta.lastAutoBackupCount} anime)
+                </>
+              ) : (
+                'Csatlakoztasd a Google Drive-ot vagy a Dropboxot, és a rendszer 24 óránként vagy 10 változás után automatikusan tükrözi az adatbázist.'
+              )}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={handleTriggerAutoBackupNow}
+          disabled={isTriggeringAutoBackup || (!driveConnected && !dropboxToken)}
+          className="px-4 py-2 rounded-xl text-xs font-mono font-bold flex items-center gap-2 transition-all shrink-0 cursor-pointer bg-white/5 hover:bg-white/10 text-white border border-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+          title={!driveConnected && !dropboxToken ? 'Csatlakoztass Google Drive-ot vagy Dropboxot a tükrözéshez' : 'Azonnali tükrözés a csatlakoztatott tárhelyekre'}
+        >
+          {isTriggeringAutoBackup ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+              <span>Tükrözés...</span>
+            </>
+          ) : (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Tükrözés Futtatása Most</span>
+            </>
+          )}
+        </button>
       </div>
 
       {/* Tabs */}

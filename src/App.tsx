@@ -18,6 +18,7 @@ import { AnimeFormModal } from './components/AnimeFormModal';
 import { AnimeTrack } from './types';
 import { subscribeToAnimeTracks, testFirestoreConnection, syncRealtimeAnimeTrack } from './services/firestoreService';
 import { initRealtimeBridgeListener, RealtimeWatchEvent } from './services/cloudSyncService';
+import { initAutoBackupEngine } from './services/autoBackupService';
 import { Radio, Sparkles, Activity, X, Tv } from 'lucide-react';
 
 function DashboardApp() {
@@ -51,6 +52,21 @@ function DashboardApp() {
         }
       );
       return () => unsubscribe();
+    }
+  }, [isAdmin]);
+
+  // Auto Backup Engine: Google Drive & Dropbox as background mirrors of Firestore
+  const tracksRef = React.useRef<AnimeTrack[]>(tracks);
+  useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      const cleanupAutoBackup = initAutoBackupEngine(() => tracksRef.current);
+      return () => {
+        if (typeof cleanupAutoBackup === 'function') cleanupAutoBackup();
+      };
     }
   }, [isAdmin]);
 

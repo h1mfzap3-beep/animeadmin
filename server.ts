@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, getDocs, collection, query, orderBy, limit } from 'firebase/firestore';
@@ -304,6 +305,21 @@ async function startServer() {
       res.status(500).json({ error: 'Failed to list tracks', message: err.message });
     }
   });
+
+  // Explicit Userscript direct serving for Tampermonkey
+  const sendUserscript = (res: Response) => {
+    const userScriptPath = path.join(process.cwd(), 'public', 'Luna-Anime-Tracker.user.js');
+    if (fs.existsSync(userScriptPath)) {
+      res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename="Luna-Anime-Tracker.user.js"');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return res.sendFile(userScriptPath);
+    }
+    res.status(404).send('Userscript not found');
+  };
+
+  app.get('/Luna-Anime-Tracker.user.js', (req: Request, res: Response) => sendUserscript(res));
+  app.get('/luna.user.js', (req: Request, res: Response) => sendUserscript(res));
 
   // Vite middleware in dev or static dist serving in prod
   if (process.env.NODE_ENV !== 'production') {
