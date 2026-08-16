@@ -1,13 +1,96 @@
 # Handoff a következő AI-nak — Luna Anime Tracker állapotváltozás és kezelési szabályok
 
-Dátum: 2026-08-16 (v6.1 frissítés). Ez a dokumentum leírja, mi változott a projektben,
-és hogy hogyan kell ezeket kezelni, hogy a szinkronizálási hiba ne térjen vissza.
+Dátum: 2026-08-16 (v6.1.1 frissítés). Ez a dokumentum leírja, mi változott a projektben,
+mit kell még megtenni, és hogy hogyan kell ezeket kezelni, hogy a szinkronizálási hiba
+ne térjen vissza.
 
 ## Kiindulási állapot
 
 - Repo: `h1mfzap3-beep/animeadmin` (privát), branch: `main`
 - **A GitHubon lévő `main` a kanonikus forrás.** Mielőtt bármit szerkesztesz, szinkronizáld
   vele a munkapéldányodat (clone/pull), és ne régebbi állapotból indulj.
+
+## AZONNALI TEENDŐK — amit a TULAJDONOSNAK kell megtennie (2026-08-16-ig meg nem történt)
+
+A kód kész és GitHubon van, de a lenti két lépés nélkül **semmi nem fog működni**,
+mert az élő Firestore szabály még mindig mindent letilt:
+
+1. **Firestore szabály publikálása** (kb. 2 perc, csak a tulaj Google-fiókjával mehet):
+   - Nyisd meg: `console.firebase.google.com` → projekt `gen-lang-client-0003317395`
+   - **Firestore Database** → felül az adatbázis-választóban válaszd ki az
+     `ai-studio-lunaanimetracker-5c5a6687-bf5d-4dc5-81e8-b9c87e1f2c97` nevű adatbázist
+     (fontos: NE az alapértelmezettet)
+   - **Rules** fül → a repo gyökerében lévő `firestore.rules` (a megszigorított v6.1.1-es
+     változat!) teljes tartalmát illeszd be → **Publish**
+   - Ellenőrzés: a Rules fülön a közzétett szabályban szerepeljen a
+     `hasOnly(syncManagedKeys())` és az `allow delete: if isSuperAdmin();`
+2. **Userscript frissítése v6.1.1-re**: nyisd meg
+   `https://raw.githubusercontent.com/h1mfzap3-beep/anime/main/Luna-Anime-Tracker.user.js`
+   → Tampermonkey felajánlja a frissítést (6.0.0 → 6.1.1).
+3. **Működés-ellenőrzés** (szabály publish után):
+   - nyiss egy támogatott anime oldalt és indíts egy epizódot → a HUD-ban
+     „✓ Felhőbe mentve" felirat jelenik meg,
+   - a weboldal listája (bejelentkezve) másodperceken belül frissül — szerver NEM kell hozzá,
+   - ha a HUD „⏳ N szinkron várakozik" állapotban ragad, a szabály nem publikálásra
+     (a böngésző konzoljában `PERMISSION_DENIED` látszik).
+
+## TEENDŐK A KÖVETKEZŐ AI-NAK — Firebase mint fő központ, Drive/Dropbox mint tükör
+
+A cél: a Firestore `anime_tracks` kollekció legyen az **egyetlen igazságforrás** (ma már
+minden UI nézet és a userscript is ide ír/olvas), a Google Drive és a Dropbox pedig NE
+önálló adatútvonal, hanem a Firestore **automatikus tükre** legyen. Ma minden mentés
+kézi gombnyomásos — ezt kell automatizálni.
+
+### Jelenlegi állapot (amire épülj)
+
+- `src/services/googleDriveService.ts`: Google OAuth a Drive-hoz
+  (`signInWithGoogleDrive`, `getDriveAccessToken`/`setDriveAccessToken`,
+  `uploadBackupToGoogleDrive`, `listGoogleDriveBackups`,
+  `downloadBackupContentFromDrive`).
+- `src/services/cloudSyncService.ts`: `generateBackupBundle(tracks, provider)`,
+  `syncToGoogleDrive(tracks, token?)`, `syncToDropbox(tracks, token)`,
+  `restoreFromDropbox(token)`, `getSavedDropboxToken`/`saveDropboxToken`,
+  `downloadBackupFile`.
+- `src/components/CloudSyncManager.tsx`: kézi Backup/Restore UI; a restore már a jó
+  úton megy: `importAnimeTracks(bundle.tracks, 'merge' | 'replace')` → Firestore.
+- `src/services/firestoreService.ts`: `subscribeToAnimeTracks` (élő lista),
+  `importAnimeTracks` (merge/replace visszaírás Firestore-ba).
+- `App.tsx` a `tracks` állapotot már a Firestore élő előfizetésből tartja — ez a
+  backup forrása, tehát a mentés definíció szerint mindig a Firestore-állapotot tükrözi.
+
+### Implementálandó: automata tükörzés (auto-backup)
+
+Új fájl: `src/services/autoBackupService.ts`, bekötve az `App.tsx`-be (admin bejelentkezés
+esetén):
+
+1. **Trigger — időzítve**: 24 óránként ellenőrizze, hogy van-e mentett Drive token
+   (`getDriveAccessToken()`) vagy Dropbox token (`getSavedDropboxToken()`); ha van,
+   futtassa a mentést a **current `tracks`** (Firestore-live) állapotból.
+2. **Trigger — változásra** (opcionális): X (pl. 10) nyomon követett változás után
+   5 perces debounce-val szintén mentsen (ne minden epizódnál spam-eljen).
+3. **Metadata**: `lastAutoBackupAt`, `lastAutoBackupProvider`, `lastAutoBackupCount` —
+   tárolva Firestore `app_metadata/auto_backup` dokumentumban (a központ saját magát
+   könyvelje; `setDoc(..., {merge:true})`), localStorage fallbackként.
+4. **Hibakezelés**: lejárt/hiányzó token → csak toast + státusz a CloudSyncManager
+   UI-ban („Drive újracsatlakoztatása szükséges"), soha nem dobódjon a hiba a fő
+   adatfolyamba; a következő ciklus újrapróbálja.
+5. **Restore maradjon explicit** (gomb), és a meglévő `importAnimeTracks(..., 'merge')`
+   útvonalon fusson. Ütközésnél a Firestore-ban lévő újabb állapot nyer
+   (`lastClientTimestamp` / `updatedAt` alapján) — a restore soha ne írhassa felül
+   frissebb Firestore-adatot régebbi mentéssel automatikusan.
+
+### Tiltások (hogy a rendszer ne csússzon vissza több forrásra)
+
+- NE legyen külön „felhő-only" adatútvonal: minden írás Firestore-ba megy,
+  a Drive/Dropbox csak olvasható tükör mentési időpontig.
+- NE duplikált tracks-állapot: egyetlen forrás (`tracks` a live-előfizetésből).
+- NE tárolj hozzáférési tokent Firestore-ban — csak localStorage-ban, ahogy most is.
+
+### Távoli jövő (csak ha kérik)
+
+- Firebase **App Check** bekapcsolása a névtelen írás visszaélések ellen (a userscript-et
+  is fel kell rá készíteni, ezért most kimaradt).
+
 
 ## 0. Luna Sync v6.1 — KÖZVETLEN FIRESTORE ÍRÁS (legfrissebb változás)
 
