@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Luna Anime Tracker HUD
 // @namespace    https://luna.tracker.local/
-// @version      6.1.0
+// @version      6.1.1
 // @description  Intelligens automatikus anime szinkronizálás és lebegő HUD magyar és nemzetközi anime oldalakhoz. Megbízható felhő-szinkron: KOZVETLEN Firestore írás (a weboldal azonnal látja), perzisztens várakozási sor, automatikus újrapróbálás, szerver-tartalék.
 // @author       Luna
 // @match        *://*.magyaranime.eu/*
@@ -1275,6 +1275,20 @@
       });
     }
 
+    // Egy visszautasított PATCH után megnézi frissen (cache nélkül), hogy a
+    // tárolt lastClientTimestamp újabb-e nálunk — ha igen, az eseményünk
+    // elavult, és biztonságosan eldobszuk a sorból.
+    function fsCheckStaleAfterReject(docId, payload) {
+      const url = FS_ROOT + '/anime_tracks/' + encodeURIComponent(docId) + '?key=' + FIRESTORE_CONFIG.apiKey;
+      return httpRequest('GET', url, null).then(function (r) {
+        if (!r.ok || !r.data || !r.data.fields) return false;
+        const storedTs = fsUntype(r.data.fields.lastClientTimestamp);
+        return typeof storedTs === 'number' &&
+               typeof payload.clientTimestamp === 'number' &&
+               storedTs - payload.clientTimestamp > 5000;
+      });
+    }
+
     // Közvetlen upsert a Firestore-ba. Visszatérési értékek a sendItem
     // konvenciója szerint: 'ack' (created/updated/skipped_stale) vagy 'retry'.
     function fsUpsertTrack(payload) {
@@ -1364,6 +1378,25 @@
               data: { action: isNew ? 'created' : 'updated', title: payload.title, episode: payload.episode }
             };
           }
+
+          // A biztonsági szabályok visszautasíthatják a régi eseményt
+          // (last-write-wins). Ilyenkor ne menjen végtelen újrapróbálásba:
+          // frissen kiolvassuk a tárolt időbélyeget, és ha tényleg régebbiek
+          // vagyunk, eldobjuk az elemet a sorból.
+          if (r.status === 403 || r.status === 400) {
+            return fsCheckStaleAfterReject(docId, payload).then(function (isStale) {
+              if (isStale) {
+                return {
+                  result: 'ack',
+                  server: 'firestore',
+                  data: { action: 'skipped_stale', title: payload.title, episode: payload.episode }
+                };
+              }
+              console.warn('[Luna Sync] Firestore REST válasz:', r.status, r.data && r.data.error && r.data.error.message);
+              return { result: r.status === 400 ? 'drop' : 'retry', server: 'firestore', status: r.status };
+            });
+          }
+
           console.warn('[Luna Sync] Firestore REST válasz:', r.status, r.data && r.data.error && r.data.error.message);
           return { result: 'retry', server: 'firestore', status: r.status };
         });

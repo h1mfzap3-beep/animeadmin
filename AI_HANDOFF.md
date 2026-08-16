@@ -28,12 +28,37 @@ A userscript `@version 6.1.0`-ra frissült. Az új elsődleges szinkronútvonal:
 
 Az élő Firestore rules jelenleg **minden hitelesítetlen hozzáférést letilt**
 (PERMISSION_DENIED), ezért nem connectelt korábban semmi. A repo gyökerében lévő
-`firestore.rules` fájl már tartalmazza a helyes, nyitott szabályt az `anime_tracks`
-kollekcióra (publikus olvasás + validált írás). **Ezt deployolni kell** Firebase
+`firestore.rules` tartalmazza a telepítendő szabályt. **Ezt deployolni kell** Firebase
 Consoleban: Firestore Database → (adatbázis-választóban az `ai-studio-lunaanimetracker-…`
 nevű DB) → Rules → a repobeli tartalom beillesztése → Publish. Alternatíva:
-`firebase deploy --only firestore:rules`. A szabály Deploy után a v6.1 script azonnal
-működik, szerver és újratelepítés nélkül is (a script frissítése azért kell: v6.1).
+`firebase deploy --only firestore:rules`. Deploy után a v6.1+ script azonnal működik,
+szerver nélkül.
+
+### Biztonsági modell (a megszigorított szabály, v6.1.1 óta)
+
+A web API-kulcs NEM titok (a Firebase web konfigból úgyis publikus — a védelmet a
+rules adja, nem a kulcs elrejtése). A szabály a következőket garantálja:
+
+- **Törlés**: kizárólag a tulaj (`h1mfzap3@gmail.com`, bejelentkezve, ellenőrzött
+  email). A userscript sosem töröl — a „bárki letörölhet mindent" kockázat megszűnt.
+- **Névtelen frissítés** (`anime_tracks`): csak a szinkron által kezelt mezőkre
+  terjedhet ki (`diff().affectedKeys().hasOnly(syncManagedKeys())`) — a `userId`,
+  `userEmail` és a többi belső mező csak adminnak módosítható.
+- **Last-write-wins szabály-szinten is**: a bejövő `lastClientTimestamp` nem lehet
+  5 s-nál régebbi a tároltnál — egy régi/rogue esemény nem írhatja vissza az állapotot.
+- **Státusz-fehérlista** (`watching`/`completed`/`on_hold`/`plan_to_watch`/`planned`/
+  `dropped`), mezőhossz- és epizódszám-limitek, URL-hossz limitek.
+- `custom_sites`: névtelen írás teljesen tiltva (olvasás publikus maradt).
+- Bejelentkezett tulaj (`isSuperAdmin()`) teljes jogkörrel ír — a weboldal összes
+  meglévő funkciója (szerkesztés, törlés, import) változatlanul működik.
+- A userscript v6.1.1 ezt kezeli: ha a szabály visszautasítja az írást, frissen
+  leellenőrzi a tárolt időbélyeget, és a valóban elavult eseményt eldobja
+  (`skipped_stale`) ahelyett, hogy végtelenül újraküldené.
+
+Ismert maradó kitettség: publikus olvasás + névtelen, korlátozott írás azt jelenti,
+hogy aki megtalálja a projektet, zaj-animeket vehet fel (mező-limiteken belül).
+Erre a szabályok rétegén felüli megoldás a Firebase **App Check** — ha ez valaha
+problémává válik, érdemes bekapcsolni (a userscript-et is fel kell akkor készíteni rá).
 
 A `config.ts` / `server.ts` fallback API-kulcsa és a `firebase-applet-config.json`
 kulcsa: `AIzaSyBT6F3vhAO_P-wb_PosgULeT-D-zwR0Mjo` (a `-D-` karakter a helyes — van
